@@ -251,6 +251,23 @@ class HtmlTest(unittest.TestCase):
                                      header=["INCOMPLETE: 1 include(s)"])
         self.assertIn("<b>INCOMPLETE: 1 include(s)</b>", html)
 
+    def test_dragging_avoids_the_fragile_browser_paths(self):
+        # Both of these cost a round trip with a user on a browser that was
+        # not to hand, so they are pinned here rather than rediscovered.
+        html = graph_mod.render_html(self.graph())
+        # capturing the pointer on an <svg> is not reliable across browsers;
+        # window listeners cover a drag leaving its element with nothing
+        # that can throw
+        self.assertNotIn("setPointerCapture", html)
+        self.assertNotIn("releasePointerCapture", html)
+        # pointer events are off by default in Firefox before 59
+        self.assertIn("window.PointerEvent", html)
+        self.assertIn("'mousedown'", html)
+        self.assertIn("'mousemove'", html)
+        self.assertIn("'mouseup'", html)
+        # and the labels must not be selected instead of dragged
+        self.assertIn("-moz-user-select: none", html)
+
     def test_format_follows_the_output_extension(self):
         self.assertEqual(cli_mod._graph_format("deck.html"), "html")
         self.assertEqual(cli_mod._graph_format("deck.HTM"), "html")

@@ -698,6 +698,10 @@ button:hover { background: #e9eff6; }
 input { width: 170px; }
 #zoom { min-width: 52px; text-align: right; color: #5c6b80; }
 #stage { flex: 1; overflow: hidden; position: relative; }
+#stage, #deck-svg {
+  -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none;
+  user-select: none; touch-action: none;
+}
 #deck-svg { width: 100%; height: 100%; display: block; }
 #hint {
   position: absolute; right: 12px; bottom: 10px; color: #8794a6;
@@ -780,47 +784,81 @@ VIEWER_JS = r"""
     zoomTo(k * (e.deltaY < 0 ? 1.12 : 1 / 1.12), at(e));
   }, { passive: false });
 
-  // Capture only once a drag is really under way.  Grabbing the pointer on
-  // pointerdown retargets the click that follows to the <svg>, which would
-  // make every click on a node read as a click on the background.
-  var drag = null, dragged = false, editDrag = null, justArranged = false;
-  svg.addEventListener('pointerdown', function (e) {
-    var node = e.target.closest ? e.target.closest('.node') : null;
-    if (node && window.__editorDown && window.__editorDown(e, node, at(e))) {
-      e.preventDefault();
-      svg.setPointerCapture(e.pointerId);
-      editDrag = e.pointerId;
-      return;                       // arranging, not panning
+  // Dragging deliberately uses neither pointer capture nor, where it is
+  // missing, pointer events at all.
+  //
+  //   * setPointerCapture on an <svg> element is not reliable across
+  //     browsers, and capturing is only needed because a drag wanders off
+  //     the element it started on - listening on the window covers that
+  //     everywhere, with nothing to throw.
+  //   * Pointer events themselves are off by default in Firefox before 59,
+  //     which an EDA site running an old ESR may well be on, so mouse
+  //     events stand in when window.PointerEvent is absent.
+  var HAS_PTR = !!window.PointerEvent;
+  var DOWN = HAS_PTR ? 'pointerdown' : 'mousedown';
+  var MOVE = HAS_PTR ? 'pointermove' : 'mousemove';
+  var UP = HAS_PTR ? 'pointerup' : 'mouseup';
+
+  var drag = null, dragged = false, editDrag = false, justArranged = false;
+
+  // Element.closest is not on SVG elements in every browser that can run
+  // the rest of this, and walking up is three lines
+  function nodeAt(target) {
+    for (var el = target; el && el !== scene; el = el.parentNode) {
+      if (el.classList && el.classList.contains('node')) return el;
     }
-    drag = { p: at(e), tx: tx, ty: ty, x: e.clientX, y: e.clientY, id: e.pointerId };
+    return null;
+  }
+
+  function listen() {
+    window.addEventListener(MOVE, onMove, true);
+    window.addEventListener(UP, onUp, true);
+  }
+  function unlisten() {
+    window.removeEventListener(MOVE, onMove, true);
+    window.removeEventListener(UP, onUp, true);
+  }
+
+  function onDown(e) {
+    if (e.button) return;                     // left button only
+    var node = nodeAt(e.target);
+    if (node && window.__editorDown && window.__editorDown(e, node, at(e))) {
+      e.preventDefault();                     // no native text drag
+      editDrag = true;
+      listen();
+      return;
+    }
+    drag = { p: at(e), tx: tx, ty: ty, x: e.clientX, y: e.clientY };
     dragged = false;
-  });
-  svg.addEventListener('pointermove', function (e) {
-    if (editDrag !== null) { window.__editorMove(at(e)); return; }
+    e.preventDefault();
+    listen();
+  }
+
+  function onMove(e) {
+    if (editDrag) { window.__editorMove(at(e)); e.preventDefault(); return; }
     if (!drag) return;
     if (!dragged) {
       if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) < 4) return;
       dragged = true;
-      try { svg.setPointerCapture(drag.id); } catch (err) { /* fine */ }
     }
     var p = at(e);
     tx = drag.tx + (p.x - drag.p.x) * k;
     ty = drag.ty + (p.y - drag.p.y) * k;
     apply();
-  });
-  function endDrag() {
-    if (editDrag !== null) {
-      try { svg.releasePointerCapture(editDrag); } catch (err) {}
-      editDrag = null;
+  }
+
+  function onUp() {
+    unlisten();
+    if (editDrag) {
+      editDrag = false;
       window.__editorUp();
       justArranged = true;
       return;
     }
-    if (drag && dragged) { try { svg.releasePointerCapture(drag.id); } catch (err) {} }
     drag = null;
   }
-  svg.addEventListener('pointerup', endDrag);
-  svg.addEventListener('pointercancel', endDrag);
+
+  svg.addEventListener(DOWN, onDown);
 
   document.getElementById('in').onclick = function () {
     var vb = svg.viewBox.baseVal;
