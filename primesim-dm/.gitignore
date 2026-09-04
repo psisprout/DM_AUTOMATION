@@ -1,6 +1,8 @@
 # generated decks / reports
 examples/out/
 *.sp
+*.svg
+*.dot
 *.sp.report.txt
 __pycache__/
 *.pyc

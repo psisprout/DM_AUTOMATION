@@ -9,6 +9,7 @@ import sys
 from . import check as check_mod
 from . import config as config_mod
 from . import deck as deck_mod
+from . import graph as graph_mod
 from . import emit
 from . import netlist as netlist_mod
 from . import spice
@@ -303,6 +304,54 @@ def cmd_terminate(args):
     return 0
 
 
+# -------------------------------------------------------------------- graph
+def cmd_graph(args):
+    dk = _read_deck(args)
+    if not dk.files:
+        return _err("could not read any of: %s" % ", ".join(args.deck))
+
+    rails = () if args.no_rails else (
+        list(graph_mod.DEFAULT_RAILS) + (args.rail or []))
+    g = graph_mod.build(dk, rails=rails, group_buses=not args.no_bus_groups,
+                        max_elements=args.max_elements)
+
+    # the picture is only as complete as the read that produced it, so it
+    # says on its face what was left out - same reason lint prints a header
+    header = ["%d element(s), %d net node(s)" % (len(g.boxes), len(g.nets))]
+    floating = [n for n in g.nets if n.floating]
+    if floating:
+        header.append("%d one-sided net node(s), drawn in red"
+                      % len(floating))
+    if dk.missing_includes:
+        header.append("INCOMPLETE: %d include(s) could not be read"
+                      % len(dk.missing_includes))
+    if dk.skipped_files:
+        header.append("%d file(s) skipped, their elements are not drawn"
+                      % len(dk.skipped_files))
+    if g.dropped:
+        header.append("%d least-connected element(s) not drawn (--max-elements)"
+                      % g.dropped)
+
+    if args.format == "dot":
+        text = graph_mod.render_dot(g)
+    else:
+        text = graph_mod.render_svg(
+            g, title=os.path.basename(args.deck[0]), header=header)
+
+    if args.output:
+        parent = os.path.dirname(os.path.abspath(args.output))
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent)
+        with open(args.output, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        print("wrote %s" % args.output)
+        for line in header:
+            print("  %s" % line)
+    else:
+        sys.stdout.write(text)
+    return 0
+
+
 # ---------------------------------------------------------------- main
 def build_parser():
     p = argparse.ArgumentParser(
@@ -415,6 +464,33 @@ def build_parser():
     s.add_argument("--force", action="store_true",
                    help="proceed even though includes are missing")
     s.set_defaults(func=cmd_terminate)
+
+    s = sub.add_parser("graph",
+                       help="draw the connectivity that lint reads as an "
+                            "SVG picture")
+    s.add_argument("deck", nargs="+")
+    s.add_argument("-o", "--output", metavar="FILE",
+                   help="write here instead of stdout (.svg or .dot)")
+    s.add_argument("--format", choices=("svg", "dot"), default="svg",
+                   help="svg: self-contained picture (default). dot: "
+                        "graphviz source, for a deck too big to lay out here")
+    s.add_argument("--rail", action="append", metavar="REGEX",
+                   help="also treat matching nets as a supply rail: drawn as "
+                        "a stub on each box, not as a wire (repeatable)")
+    s.add_argument("--no-rails", action="store_true",
+                   help="draw supplies as ordinary nets (expect a hairball)")
+    s.add_argument("--no-bus-groups", action="store_true",
+                   help="draw dq0..dq7 as eight nets rather than one bus")
+    s.add_argument("--max-elements", type=int, default=80, metavar="N",
+                   help="draw at most N elements, the best-connected first "
+                        "(default 80)")
+    s.add_argument("--no-includes", action="store_true")
+    s.add_argument("--search-dir", action="append")
+    s.add_argument("--opaque", action="append", metavar="REGEX")
+    s.add_argument("--no-default-opaque", action="store_true")
+    s.add_argument("--skip", action="append", metavar="REGEX")
+    s.add_argument("--max-depth", type=int, metavar="N")
+    s.set_defaults(func=cmd_graph)
 
     s = sub.add_parser("check", help="print the connectivity report only")
     s.add_argument("config")
