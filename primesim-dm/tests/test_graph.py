@@ -258,8 +258,10 @@ class HtmlTest(unittest.TestCase):
         # capturing the pointer on an <svg> is not reliable across browsers;
         # window listeners cover a drag leaving its element with nothing
         # that can throw
-        self.assertNotIn("setPointerCapture", html)
-        self.assertNotIn("releasePointerCapture", html)
+        # the call, not the word: the comment above it explains why it is
+        # not there and would otherwise trip this
+        self.assertNotIn(".setPointerCapture(", html)
+        self.assertNotIn(".releasePointerCapture(", html)
         # pointer events are off by default in Firefox before 59
         self.assertIn("window.PointerEvent", html)
         self.assertIn("'mousedown'", html)
