@@ -3,6 +3,7 @@ examples/out/
 *.sp
 *.svg
 *.dot
+*.html
 *.sp.report.txt
 __pycache__/
 *.pyc

@@ -6,6 +6,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from primesim_dm import deck as deck_mod       # noqa: E402
+from primesim_dm import cli as cli_mod         # noqa: E402
 from primesim_dm import graph as graph_mod     # noqa: E402
 
 
@@ -183,6 +184,77 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(dot.count("[shape=oval,"), len(g.nets))
         self.assertEqual(dot.count(" -- b"),
                          sum(len(n.boxes) for n in g.nets))
+
+
+class HtmlTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def graph(self, text="* t\nXA vdd a0 sub\nXB vdd a0 b0 sub\n"):
+        return graph_mod.build(read_text(self.tmp, text))
+
+    def test_background_rect_is_a_real_length(self):
+        # it is a plain literal, not a format string: "100%%" would reach
+        # the browser verbatim and the background would not paint
+        svg = graph_mod.render_svg(self.graph())
+        self.assertIn('class="bg" width="100%" height="100%"', svg)
+        self.assertNotIn("100%%", svg)
+
+    def test_scene_group_wraps_the_drawing(self):
+        svg = graph_mod.render_svg(self.graph())
+        self.assertEqual(svg.count('<g id="scene">'), 1)
+        self.assertIn('id="deck-svg"', svg)
+
+    def test_every_wire_points_at_nodes_that_exist(self):
+        svg = graph_mod.render_svg(self.graph())
+        ids = set(re.findall(r'<g class="node" id="([^"]+)"', svg))
+        pairs = re.findall(r'data-net="([^"]+)" data-box="([^"]+)"', svg)
+        self.assertTrue(pairs)
+        for net, box in pairs:
+            self.assertIn(net, ids)
+            self.assertIn(box, ids)
+
+    def test_html_carries_the_picture_and_its_controls(self):
+        html = graph_mod.render_html(self.graph(), title="t.sp",
+                                     header=["2 element(s)"])
+        self.assertIn("<svg", html)
+        self.assertIn('id="scene"', html)
+        for control in ('id="in"', 'id="out"', 'id="fit"', 'id="one"',
+                        'id="find"', 'id="zoom"'):
+            self.assertIn(control, html)
+        self.assertIn("2 element(s)", html)
+
+    def test_html_needs_no_network(self):
+        # these run where there is no pip and no internet; a viewer that
+        # fetches a library is a viewer that shows a blank page
+        html = graph_mod.render_html(self.graph())
+        stripped = html.replace('xmlns="http://www.w3.org/2000/svg"', "")
+        self.assertNotIn("http://", stripped)
+        self.assertNotIn("https://", stripped)
+        self.assertNotIn("<script src", html)
+
+    def test_html_does_not_repeat_the_header_inside_the_svg(self):
+        html = graph_mod.render_html(self.graph(), title="t.sp",
+                                     header=["2 element(s)"])
+        self.assertEqual(html.count("2 element(s)"), 1)
+
+    def test_incomplete_reads_are_called_out(self):
+        html = graph_mod.render_html(self.graph(),
+                                     header=["INCOMPLETE: 1 include(s)"])
+        self.assertIn("<b>INCOMPLETE: 1 include(s)</b>", html)
+
+    def test_format_follows_the_output_extension(self):
+        self.assertEqual(cli_mod._graph_format("deck.html"), "html")
+        self.assertEqual(cli_mod._graph_format("deck.HTM"), "html")
+        self.assertEqual(cli_mod._graph_format("deck.dot"), "dot")
+        self.assertEqual(cli_mod._graph_format("deck.gv"), "dot")
+        self.assertEqual(cli_mod._graph_format("deck.svg"), "svg")
+        self.assertEqual(cli_mod._graph_format(None), "svg")
 
 
 class LayoutTest(unittest.TestCase):

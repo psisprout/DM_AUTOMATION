@@ -338,6 +338,10 @@ STYLE = """
   .floatwire { stroke: #c0392b; stroke-width: 1.3; stroke-dasharray: 5 3; fill: none; }
   .head { fill: #1b2431; font: 600 13px ui-monospace, Menlo, Consolas, monospace; }
   .note { fill: #5c6b80; font: 11px ui-monospace, Menlo, Consolas, monospace; }
+  .dim  { opacity: 0.10; }
+  .hot rect { stroke-width: 2.6; }
+  .hot-wire { stroke-width: 3.2; }
+  #scene .node { cursor: pointer; }
 @media (prefers-color-scheme: dark) {
   .bg   { fill: #12161c; }
   .box  { fill: #1e2733; stroke: #7e93ad; }
@@ -357,7 +361,8 @@ STYLE = """
 """
 
 
-def render_svg(g, title="deck connectivity", header=()):
+def render_svg(g, title="deck connectivity", header=(), embed_header=True):
+    """The picture. ``embed_header`` off when the HTML chrome shows it."""
     _measure(g)
     if g.boxes or g.nets:
         _layer(g)
@@ -366,47 +371,61 @@ def render_svg(g, title="deck connectivity", header=()):
         layers = {}
     width, height = _place(g, layers) if layers else (420, 120)
 
-    head_lines = [title] + list(header)
-    top = 22 + 16 * len(head_lines)
+    head_lines = [title] + list(header) if embed_header else []
+    top = (22 + 16 * len(head_lines)) if head_lines else 20
     height += top
 
-    out = ['<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" '
-           'viewBox="0 0 %d %d" font-family="monospace">'
-           % (width, height, width, height),
+    out = ['<svg xmlns="http://www.w3.org/2000/svg" id="deck-svg" '
+           'width="%d" height="%d" viewBox="0 0 %d %d" '
+           'font-family="monospace">' % (width, height, width, height),
            "<style>%s</style>" % STYLE,
-           '<rect class="bg" width="%d" height="%d"/>' % (width, height)]
+           '<rect class="bg" width="100%" height="100%"/>']
 
-    out.append('<text class="head" x="24" y="30">%s</text>' % _esc(title))
-    for i, line in enumerate(header):
-        out.append('<text class="note" x="24" y="%d">%s</text>'
-                   % (48 + i * 15, _esc(line)))
+    if head_lines:
+        out.append('<text class="head" x="24" y="30">%s</text>' % _esc(title))
+        for i, line in enumerate(header):
+            out.append('<text class="note" x="24" y="%d">%s</text>'
+                       % (48 + i * 15, _esc(line)))
 
     for node in g.boxes + g.nets:
         node.y += top
 
-    # wires first, so boxes sit on top of them
+    # ids let the HTML viewer light up one net and everything on it
+    bid = {id(b): "b%d" % i for i, b in enumerate(g.boxes)}
+    nid = {id(n): "n%d" % i for i, n in enumerate(g.nets)}
+
+    out.append('<g id="scene">')
+
+    # wires first, so the boxes sit on top of them
     for net in g.nets:
         cls = "floatwire" if net.floating else ("bus" if net.width > 1
                                                 else "wire")
         for box in net.boxes:
             x1, y1, x2, y2 = _edge(net, box)
-            out.append('<path class="%s" d="M %.1f %.1f L %.1f %.1f"/>'
-                       % (cls, x1, y1, x2, y2))
+            out.append('<path class="%s wire-of" data-net="%s" data-box="%s" '
+                       'd="M %.1f %.1f L %.1f %.1f"/>'
+                       % (cls, nid[id(net)], bid[id(box)], x1, y1, x2, y2))
 
     for net in g.nets:
         label = net.label + ("  x%d" % net.width if net.width > 1 else "")
         cls, lcls = ("float", "floatl") if net.floating else ("net", "netl")
+        out.append('<g class="node" id="%s" data-search="%s">'
+                   % (nid[id(net)], _esc(" ".join([net.label] + net.nets))))
         out.append('<rect class="%s" x="%.1f" y="%.1f" width="%.1f" '
                    'height="%.1f" rx="11"/>'
                    % (cls, net.x, net.y, net.w, net.h))
         out.append('<text class="%s" x="%.1f" y="%.1f" '
                    'text-anchor="middle">%s</text>'
                    % (lcls, net.x + net.w / 2.0, net.y + 15, _esc(label)))
-        if net.floating:
-            out.append("<title>%s (touched by one port only)</title>"
-                       % _esc(", ".join(net.nets)))
+        out.append("<title>%s</title>" % _esc(
+            ", ".join(net.nets) + (" (touched by one port only)"
+                                   if net.floating else "")))
+        out.append("</g>")
 
     for box in g.boxes:
+        out.append('<g class="node" id="%s" data-search="%s">'
+                   % (bid[id(box)],
+                      _esc(" ".join([box.name, box.sub_label]))))
         out.append('<rect class="box" x="%.1f" y="%.1f" width="%.1f" '
                    'height="%.1f" rx="4"/>' % (box.x, box.y, box.w, box.h))
         mid = box.x + box.w / 2.0
@@ -419,13 +438,14 @@ def render_svg(g, title="deck connectivity", header=()):
         if box.rails:
             out.append('<text class="rail" x="%.1f" y="%.1f" '
                        'text-anchor="middle">%s</text>'
-                       % (mid, box.y + 45, _esc("⏚ " + ", ".join(box.rails))))
+                       % (mid, box.y + 45, _esc("\u23da " + ", ".join(box.rails))))
         out.append("<title>%s at %s</title>"
                    % (_esc(box.name), _esc(box.el.where())))
+        out.append("</g>")
 
+    out.append("</g>")
     out.append("</svg>")
     return "\n".join(out) + "\n"
-
 
 def render_dot(g):
     """Graphviz source, for a deck too big for the built-in layout."""
@@ -454,3 +474,246 @@ def render_dot(g):
             lines.append("  n%d -- b%d%s;" % (j, ids[id(box)], style))
     lines.append("}")
     return "\n".join(lines) + "\n"
+
+
+# -------------------------------------------------------------- html viewer
+# A deck with eighty instances does not fit on a screen, and a picture you
+# cannot get into is not much better than the report it replaced.  This wraps
+# the same SVG in the smallest viewer that makes a big one usable: wheel to
+# zoom, drag to pan, type to find a net, click to light up what touches it.
+# No library and no network - the environments this runs in have neither.
+VIEWER_CSS = """
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  display: flex; flex-direction: column; background: #ffffff; color: #1b2431;
+  font: 12px ui-monospace, Menlo, Consolas, monospace;
+}
+#bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 12px; border-bottom: 1px solid #d4dbe4; background: #f6f8fb;
+}
+#bar h1 { margin: 0 8px 0 0; font-size: 13px; font-weight: 600; }
+#notes { color: #5c6b80; }
+#notes b { color: #c0392b; font-weight: 600; }
+button, input {
+  font: inherit; color: inherit; background: #ffffff;
+  border: 1px solid #b6c0cd; border-radius: 4px; padding: 3px 8px;
+}
+button { cursor: pointer; }
+button:hover { background: #e9eff6; }
+input { width: 170px; }
+#zoom { min-width: 52px; text-align: right; color: #5c6b80; }
+#stage { flex: 1; overflow: hidden; position: relative; }
+#deck-svg { width: 100%; height: 100%; display: block; }
+#hint {
+  position: absolute; right: 12px; bottom: 10px; color: #8794a6;
+  pointer-events: none;
+}
+@media (prefers-color-scheme: dark) {
+  body { background: #12161c; color: #e8edf4; }
+  #bar { background: #1a212a; border-bottom-color: #333e4c; }
+  #notes { color: #93a3b8; }
+  #notes b { color: #e2725f; }
+  button, input { background: #202834; border-color: #3d4957; }
+  button:hover { background: #2b3644; }
+  #zoom, #hint { color: #7f8fa4; }
+}
+"""
+
+VIEWER_JS = r"""
+(function () {
+  var svg = document.getElementById('deck-svg');
+  var scene = document.getElementById('scene');
+  var zoomLabel = document.getElementById('zoom');
+  var find = document.getElementById('find');
+  var k = 1, tx = 0, ty = 0;
+
+  function apply() {
+    scene.setAttribute('transform',
+      'translate(' + tx.toFixed(2) + ' ' + ty.toFixed(2) + ') ' +
+      'scale(' + k.toFixed(4) + ')');
+    zoomLabel.textContent = Math.round(k * 100) + '%';
+  }
+
+  // client pixels -> the svg's own units, so zooming holds the point under
+  // the cursor still whatever size the window is
+  function at(evt) {
+    var box = svg.getBoundingClientRect();
+    var vb = svg.viewBox.baseVal;
+    var scale = Math.min(box.width / vb.width, box.height / vb.height);
+    var offX = (box.width - vb.width * scale) / 2;
+    var offY = (box.height - vb.height * scale) / 2;
+    return { x: (evt.clientX - box.left - offX) / scale,
+             y: (evt.clientY - box.top - offY) / scale };
+  }
+
+  function zoomTo(next, at_) {
+    next = Math.max(0.08, Math.min(12, next));
+    tx = at_.x - (at_.x - tx) * (next / k);
+    ty = at_.y - (at_.y - ty) * (next / k);
+    k = next;
+    apply();
+  }
+
+  function fit() {
+    var b = scene.getBBox();
+    if (!b.width || !b.height) { k = 1; tx = ty = 0; apply(); return; }
+    var vb = svg.viewBox.baseVal;
+    k = Math.min(vb.width / b.width, vb.height / b.height) * 0.94;
+    tx = (vb.width - b.width * k) / 2 - b.x * k;
+    ty = (vb.height - b.height * k) / 2 - b.y * k;
+    apply();
+  }
+
+  svg.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    zoomTo(k * (e.deltaY < 0 ? 1.12 : 1 / 1.12), at(e));
+  }, { passive: false });
+
+  // Capture only once a drag is really under way.  Grabbing the pointer on
+  // pointerdown retargets the click that follows to the <svg>, which would
+  // make every click on a node read as a click on the background.
+  var drag = null, dragged = false;
+  svg.addEventListener('pointerdown', function (e) {
+    drag = { p: at(e), tx: tx, ty: ty, x: e.clientX, y: e.clientY, id: e.pointerId };
+    dragged = false;
+  });
+  svg.addEventListener('pointermove', function (e) {
+    if (!drag) return;
+    if (!dragged) {
+      if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) < 4) return;
+      dragged = true;
+      try { svg.setPointerCapture(drag.id); } catch (err) { /* fine */ }
+    }
+    var p = at(e);
+    tx = drag.tx + (p.x - drag.p.x) * k;
+    ty = drag.ty + (p.y - drag.p.y) * k;
+    apply();
+  });
+  function endDrag() {
+    if (drag && dragged) { try { svg.releasePointerCapture(drag.id); } catch (err) {} }
+    drag = null;
+  }
+  svg.addEventListener('pointerup', endDrag);
+  svg.addEventListener('pointercancel', endDrag);
+
+  document.getElementById('in').onclick = function () {
+    var vb = svg.viewBox.baseVal;
+    zoomTo(k * 1.3, { x: vb.width / 2, y: vb.height / 2 });
+  };
+  document.getElementById('out').onclick = function () {
+    var vb = svg.viewBox.baseVal;
+    zoomTo(k / 1.3, { x: vb.width / 2, y: vb.height / 2 });
+  };
+  document.getElementById('fit').onclick = fit;
+  document.getElementById('one').onclick = function () {
+    k = 1; tx = ty = 0; apply();
+  };
+
+  var nodes = [].slice.call(scene.querySelectorAll('.node'));
+  var wires = [].slice.call(scene.querySelectorAll('.wire-of'));
+
+  function clear() {
+    nodes.forEach(function (n) { n.classList.remove('dim', 'hot'); });
+    wires.forEach(function (w) { w.classList.remove('dim', 'hot-wire'); });
+  }
+
+  // clicking a net lights up every box on it, and the other way round -
+  // the question a connectivity picture gets asked most
+  function focus(id) {
+    var keep = {}, keepW = [];
+    wires.forEach(function (w) {
+      if (w.dataset.net === id || w.dataset.box === id) {
+        keep[w.dataset.net] = keep[w.dataset.box] = 1;
+        keepW.push(w);
+      }
+    });
+    keep[id] = 1;
+    nodes.forEach(function (n) {
+      n.classList.toggle('dim', !keep[n.id]);
+      n.classList.toggle('hot', n.id === id);
+    });
+    wires.forEach(function (w) {
+      var on = keepW.indexOf(w) >= 0;
+      w.classList.toggle('dim', !on);
+      w.classList.toggle('hot-wire', on);
+    });
+  }
+
+  nodes.forEach(function (n) {
+    n.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (n.classList.contains('hot')) { clear(); } else { focus(n.id); }
+    });
+  });
+  svg.addEventListener('click', function () { if (!dragged) clear(); });
+
+  find.addEventListener('input', function () {
+    var q = find.value.trim().toLowerCase();
+    if (!q) { clear(); return; }
+    var hit = {};
+    nodes.forEach(function (n) {
+      var on = (n.dataset.search || '').toLowerCase().indexOf(q) >= 0;
+      n.classList.toggle('dim', !on);
+      n.classList.remove('hot');
+      if (on) hit[n.id] = 1;
+    });
+    wires.forEach(function (w) {
+      var on = hit[w.dataset.net] || hit[w.dataset.box];
+      w.classList.toggle('dim', !on);
+      w.classList.remove('hot-wire');
+    });
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.target === find) { if (e.key === 'Escape') { find.value = ''; clear(); find.blur(); } return; }
+    if (e.key === '0' || e.key === 'f') fit();
+    else if (e.key === '+' || e.key === '=') document.getElementById('in').click();
+    else if (e.key === '-') document.getElementById('out').click();
+    else if (e.key === '/') { e.preventDefault(); find.focus(); }
+    else if (e.key === 'Escape') clear();
+  });
+
+  fit();
+  window.addEventListener('resize', function () { apply(); });
+})();
+"""
+
+
+def render_html(g, title="deck connectivity", header=()):
+    """The same picture, in a viewer you can get around a big deck with."""
+    svg = render_svg(g, title=title, header=header, embed_header=False)
+    notes = []
+    for line in header:
+        notes.append("<b>%s</b>" % _esc(line) if line.startswith("INCOMPLETE")
+                     else _esc(line))
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>%(title)s - connectivity</title>
+<style>%(css)s</style>
+</head>
+<body>
+<div id="bar">
+  <h1>%(title)s</h1>
+  <button id="out" title="zoom out (-)">-</button>
+  <span id="zoom">100%%</span>
+  <button id="in" title="zoom in (+)">+</button>
+  <button id="fit" title="fit to window (0)">fit</button>
+  <button id="one" title="actual size">1:1</button>
+  <input id="find" type="search" placeholder="find net or instance  (/)">
+  <span id="notes">%(notes)s</span>
+</div>
+<div id="stage">
+%(svg)s
+<div id="hint">wheel: zoom &middot; drag: pan &middot; click: trace a net</div>
+</div>
+<script>%(js)s</script>
+</body>
+</html>
+""" % {"title": _esc(title), "css": VIEWER_CSS, "js": VIEWER_JS,
+       "svg": svg, "notes": " &middot; ".join(notes)}

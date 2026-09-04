@@ -305,6 +305,13 @@ def cmd_terminate(args):
 
 
 # -------------------------------------------------------------------- graph
+def _graph_format(output):
+    """-o deck.html means html; nobody should have to say it twice."""
+    ext = os.path.splitext(output or "")[1].lower()
+    return {".html": "html", ".htm": "html", ".dot": "dot",
+            ".gv": "dot"}.get(ext, "svg")
+
+
 def cmd_graph(args):
     dk = _read_deck(args)
     if not dk.files:
@@ -332,11 +339,14 @@ def cmd_graph(args):
         header.append("%d least-connected element(s) not drawn (--max-elements)"
                       % g.dropped)
 
-    if args.format == "dot":
+    fmt = args.format or _graph_format(args.output)
+    title = os.path.basename(args.deck[0])
+    if fmt == "dot":
         text = graph_mod.render_dot(g)
+    elif fmt == "html":
+        text = graph_mod.render_html(g, title=title, header=header)
     else:
-        text = graph_mod.render_svg(
-            g, title=os.path.basename(args.deck[0]), header=header)
+        text = graph_mod.render_svg(g, title=title, header=header)
 
     if args.output:
         parent = os.path.dirname(os.path.abspath(args.output))
@@ -471,9 +481,11 @@ def build_parser():
     s.add_argument("deck", nargs="+")
     s.add_argument("-o", "--output", metavar="FILE",
                    help="write here instead of stdout (.svg or .dot)")
-    s.add_argument("--format", choices=("svg", "dot"), default="svg",
-                   help="svg: self-contained picture (default). dot: "
-                        "graphviz source, for a deck too big to lay out here")
+    s.add_argument("--format", choices=("svg", "html", "dot"),
+                   help="svg: a picture to embed in a report. html: the same "
+                        "picture in a viewer that zooms, pans and searches - "
+                        "what a big deck needs. dot: graphviz source. "
+                        "Default: taken from the -o extension, else svg")
     s.add_argument("--rail", action="append", metavar="REGEX",
                    help="also treat matching nets as a supply rail: drawn as "
                         "a stub on each box, not as a wire (repeatable)")
