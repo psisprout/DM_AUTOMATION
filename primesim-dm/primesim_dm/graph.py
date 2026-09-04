@@ -22,6 +22,7 @@ no elements, so the header says so; a picture that quietly omits half the
 deck is worse than no picture.
 """
 
+import os
 import re
 
 # Nets that tie to nearly every instance.  Drawn as wires they dominate the
@@ -107,6 +108,9 @@ class Graph(object):
         self.nets = []
         self.notes = []           # what the picture does not cover
         self.dropped = 0          # elements left out by --max-elements
+        self.columns = []         # names of the element columns, left to right
+        self.unplaced = 0         # boxes no layout file spoke for
+        self.geom = {"x": {}, "width": {}}   # per-column x and width
 
 
 def _rail_filter(patterns):
@@ -175,6 +179,123 @@ def build(deck, rails=DEFAULT_RAILS, group_buses=True, max_elements=80):
 
 
 # ------------------------------------------------------------------ layout
+class Layout(object):
+    """Where the columns are and which instance sits in which.
+
+    The automatic layering is a guess from connectivity alone.  It cannot
+    know that these four instances are "the TX side" and those are "package",
+    so once someone has arranged a deck by hand that arrangement is worth
+    more than the guess - and worth keeping, which is why it lives in a file
+    next to the deck rather than in the picture.
+    """
+
+    VERSION = 1
+
+    def __init__(self, columns=None, elements=None):
+        self.columns = list(columns or [])      # column names, left to right
+        self.elements = dict(elements or {})    # element name -> {column,row}
+
+    def column_of(self, name):
+        spec = self.elements.get(name)
+        return None if spec is None else spec.get("column")
+
+    def to_dict(self):
+        return {"version": self.VERSION,
+                "columns": [{"name": n} for n in self.columns],
+                # rows are written as whole numbers so that reading a file
+                # and writing it back leaves it byte for byte the same - a
+                # layout file lives in version control
+                "elements": {k: {"column": int(v["column"]),
+                                 "row": int(round(v["row"]))}
+                             for k, v in sorted(self.elements.items())}}
+
+
+class LayoutError(Exception):
+    pass
+
+
+def load_layout(text, where="layout"):
+    """Parse a layout file.  Anything malformed is an error, not a shrug:
+    silently falling back to the automatic layout would look like the hand
+    arrangement was lost."""
+    import json
+    try:
+        raw = json.loads(text)
+    except ValueError as exc:
+        raise LayoutError("%s is not valid JSON: %s" % (where, exc))
+    if not isinstance(raw, dict):
+        raise LayoutError("%s: expected an object at the top level" % where)
+
+    cols = raw.get("columns") or []
+    names = []
+    for i, col in enumerate(cols):
+        if isinstance(col, dict):
+            names.append(str(col.get("name", "column %d" % (i + 1))))
+        else:
+            names.append(str(col))
+    if not names:
+        raise LayoutError("%s: no columns defined" % where)
+
+    elements = {}
+    for name, spec in (raw.get("elements") or {}).items():
+        if not isinstance(spec, dict):
+            raise LayoutError("%s: element %s should be an object" %
+                              (where, name))
+        try:
+            col = int(spec.get("column", 0))
+            row = float(spec.get("row", 0))
+        except (TypeError, ValueError):
+            raise LayoutError("%s: element %s has a non-numeric column/row"
+                              % (where, name))
+        if not 0 <= col < len(names):
+            raise LayoutError("%s: element %s is in column %d, but only %d "
+                              "column(s) are defined" %
+                              (where, name, col, len(names)))
+        elements[name] = {"column": col, "row": row}
+    return Layout(names, elements)
+
+
+def dump_layout(layout):
+    import json
+    return json.dumps(layout.to_dict(), indent=2, sort_keys=False) + "\n"
+
+
+def layout_of(g):
+    """The arrangement a picture currently has, as a saveable Layout."""
+    elements = {}
+    for box in g.boxes:
+        elements[box.name] = {"column": int(box.layer // 2),
+                              "row": int(box.order)}
+    return Layout(g.columns, elements)
+
+
+def _layer_from_layout(g, layout):
+    """Columns come from the file; nets still find their own gap."""
+    ncols = len(layout.columns)
+    g.columns = list(layout.columns)
+    unplaced = []
+    for box in g.boxes:
+        spec = layout.elements.get(box.name)
+        if spec is None:
+            unplaced.append(box)
+            continue
+        box.layer = int(spec["column"]) * 2
+        box.order = float(spec["row"])
+
+    if unplaced:
+        # a deck grows; what the file has not heard of goes in a column of
+        # its own rather than being scattered where it might pass unnoticed
+        col = ncols
+        g.columns.append("unplaced")
+        for i, box in enumerate(sorted(unplaced, key=lambda b: b.name)):
+            box.layer = col * 2
+            box.order = i
+    g.unplaced = len(unplaced)
+
+    for net in g.nets:
+        net.layer = (min(b.layer for b in net.boxes) + 1) if net.boxes else 1
+
+
 def _layer(g):
     """Bipartite layering: elements on even columns, nets on odd ones.
 
@@ -225,9 +346,17 @@ def _layer(g):
         if net.boxes and net.layer == 0:
             net.layer = max(b.layer for b in net.boxes) + 1
 
+    widest = max([b.layer for b in g.boxes] or [0])
+    g.columns = ["column %d" % (i + 1) for i in range(widest // 2 + 1)]
 
-def _order(g, passes=4):
-    """Barycentre sweeps: pull each node next to the average of its peers."""
+
+def _order(g, passes=4, pinned=()):
+    """Barycentre sweeps: pull each node next to the average of its peers.
+
+    Nodes in ``pinned`` keep the order they came with - a row somebody set by
+    hand is an instruction, not a starting guess.
+    """
+    fixed = set(pinned)
     adj = {}
     for net in g.nets:
         for box in net.boxes:
@@ -237,6 +366,10 @@ def _order(g, passes=4):
     layers = {}
     for node in g.boxes + g.nets:
         layers.setdefault(node.layer, []).append(node)
+    # a column somebody made and then emptied is still a column: dropping it
+    # silently would move everything to its right and lose the arrangement
+    for i in range(len(g.columns)):
+        layers.setdefault(i * 2, [])
     for nodes in layers.values():
         nodes.sort(key=lambda n: n.order)
         for i, node in enumerate(nodes):
@@ -248,6 +381,8 @@ def _order(g, passes=4):
         for lay in seq:
             nodes = layers[lay]
             for node in nodes:
+                if id(node) in fixed:
+                    continue
                 peers = [p for p in adj.get(id(node), ())
                          if abs(p.layer - lay) == 1]
                 if peers:
@@ -260,6 +395,8 @@ def _order(g, passes=4):
 
 # ------------------------------------------------------------------ render
 CHAR_W = 6.9          # monospace advance at 11.5px, near enough for sizing
+MARGIN = 30
+EMPTY_COL_W = 130     # a column you emptied keeps its slot to drop into
 BOX_PAD = 18
 COL_GAP = 62
 ROW_GAP = 16
@@ -285,26 +422,29 @@ def _measure(g):
 
 
 def _place(g, layers):
-    xs, x = {}, 30.0
+    xs, widths, x = {}, {}, float(MARGIN)
     for lay in sorted(layers):
-        wide = max(n.w for n in layers[lay])
+        wide = max([n.w for n in layers[lay]] or [EMPTY_COL_W])
         xs[lay] = x
+        widths[lay] = wide
         x += wide + COL_GAP
-    total_w = x - COL_GAP + 30
+    total_w = x - COL_GAP + MARGIN
+    g.geom = {"x": xs, "width": widths}
 
     heights = {}
     for lay, nodes in layers.items():
-        heights[lay] = sum(n.h for n in nodes) + ROW_GAP * (len(nodes) - 1)
+        heights[lay] = (sum(n.h for n in nodes) + ROW_GAP * (len(nodes) - 1)
+                        if nodes else 0)
     tallest = max(heights.values()) if heights else 0
 
     for lay, nodes in layers.items():
-        wide = max(n.w for n in nodes)
-        y = 30 + (tallest - heights[lay]) / 2.0
+        wide = widths[lay]
+        y = MARGIN + (tallest - heights[lay]) / 2.0
         for node in sorted(nodes, key=lambda n: n.order):
             node.x = xs[lay] + (wide - node.w) / 2.0
             node.y = y
             y += node.h + ROW_GAP
-    return total_w, tallest + 60
+    return total_w, tallest + MARGIN * 2
 
 
 def _edge(a, b):
@@ -338,6 +478,8 @@ STYLE = """
   .floatwire { stroke: #c0392b; stroke-width: 1.3; stroke-dasharray: 5 3; fill: none; }
   .head { fill: #1b2431; font: 600 13px ui-monospace, Menlo, Consolas, monospace; }
   .note { fill: #5c6b80; font: 11px ui-monospace, Menlo, Consolas, monospace; }
+  .col  { fill: #7286a0; font: 600 11px ui-monospace, Menlo, Consolas, monospace;
+          letter-spacing: 0.06em; }
   .dim  { opacity: 0.10; }
   .hot rect { stroke-width: 2.6; }
   .hot-wire { stroke-width: 3.2; }
@@ -357,16 +499,26 @@ STYLE = """
   .floatwire { stroke: #e2725f; }
   .head { fill: #e8edf4; }
   .note { fill: #93a3b8; }
+  .col  { fill: #8fa2bb; }
 }
 """
 
 
-def render_svg(g, title="deck connectivity", header=(), embed_header=True):
-    """The picture. ``embed_header`` off when the HTML chrome shows it."""
+def render_svg(g, title="deck connectivity", header=(), embed_header=True,
+               layout=None):
+    """The picture.  ``embed_header`` off when the HTML chrome shows it.
+
+    With a ``layout`` the element columns come from the file and stay put;
+    without one they are guessed from connectivity.
+    """
     _measure(g)
     if g.boxes or g.nets:
-        _layer(g)
-        layers = _order(g, passes=4)
+        if layout is not None:
+            _layer_from_layout(g, layout)
+            layers = _order(g, passes=4, pinned=[id(b) for b in g.boxes])
+        else:
+            _layer(g)
+            layers = _order(g, passes=4)
     else:
         layers = {}
     width, height = _place(g, layers) if layers else (420, 120)
@@ -387,6 +539,7 @@ def render_svg(g, title="deck connectivity", header=(), embed_header=True):
             out.append('<text class="note" x="24" y="%d">%s</text>'
                        % (48 + i * 15, _esc(line)))
 
+    g.geom["top"] = top
     for node in g.boxes + g.nets:
         node.y += top
 
@@ -395,6 +548,18 @@ def render_svg(g, title="deck connectivity", header=(), embed_header=True):
     nid = {id(n): "n%d" % i for i, n in enumerate(g.nets)}
 
     out.append('<g id="scene">')
+    out.append('<g id="colheads"></g><g id="dropzones"></g>'
+               '<line id="dropline" x1="0" y1="0" x2="0" y2="0"/>')
+
+    if layout is not None and g.columns:
+        for i, name in enumerate(g.columns):
+            lay = i * 2
+            if lay not in g.geom.get("x", {}):
+                continue
+            cx = g.geom["x"][lay] + g.geom["width"][lay] / 2.0
+            out.append('<text class="col" x="%.1f" y="%.1f" '
+                       'text-anchor="middle">%s</text>'
+                       % (cx, top + 18, _esc(name)))
 
     # wires first, so the boxes sit on top of them
     for net in g.nets:
@@ -409,7 +574,7 @@ def render_svg(g, title="deck connectivity", header=(), embed_header=True):
     for net in g.nets:
         label = net.label + ("  x%d" % net.width if net.width > 1 else "")
         cls, lcls = ("float", "floatl") if net.floating else ("net", "netl")
-        out.append('<g class="node" id="%s" data-search="%s">'
+        out.append('<g class="node net-node" id="%s" data-search="%s">'
                    % (nid[id(net)], _esc(" ".join([net.label] + net.nets))))
         out.append('<rect class="%s" x="%.1f" y="%.1f" width="%.1f" '
                    'height="%.1f" rx="11"/>'
@@ -423,8 +588,9 @@ def render_svg(g, title="deck connectivity", header=(), embed_header=True):
         out.append("</g>")
 
     for box in g.boxes:
-        out.append('<g class="node" id="%s" data-search="%s">'
-                   % (bid[id(box)],
+        out.append('<g class="node box-node" id="%s" data-name="%s" '
+                   'data-search="%s">'
+                   % (bid[id(box)], _esc(box.name),
                       _esc(" ".join([box.name, box.sub_label]))))
         out.append('<rect class="box" x="%.1f" y="%.1f" width="%.1f" '
                    'height="%.1f" rx="4"/>' % (box.x, box.y, box.w, box.h))
@@ -446,6 +612,32 @@ def render_svg(g, title="deck connectivity", header=(), embed_header=True):
     out.append("</g>")
     out.append("</svg>")
     return "\n".join(out) + "\n"
+
+
+def viewer_state(g):
+    """Everything the in-page editor needs to re-place nodes as they move.
+
+    It mirrors :func:`_place`, and deliberately so: the arrangement you drag
+    into shape must come back identical when the file is regenerated, so the
+    two placements have to follow the same rule.
+    """
+    boxes = []
+    for i, box in enumerate(g.boxes):
+        boxes.append({"id": "b%d" % i, "name": box.name,
+                      "col": int(box.layer // 2), "row": float(box.order),
+                      "x": round(box.x, 2), "y": round(box.y, 2),
+                      "w": round(box.w, 2), "h": round(box.h, 2)})
+    bid = {id(b): "b%d" % i for i, b in enumerate(g.boxes)}
+    nets = []
+    for j, net in enumerate(g.nets):
+        nets.append({"id": "n%d" % j, "label": net.label,
+                     "boxes": [bid[id(b)] for b in net.boxes],
+                     "x": round(net.x, 2), "y": round(net.y, 2),
+                     "w": round(net.w, 2), "h": round(net.h, 2)})
+    return {"columns": list(g.columns), "boxes": boxes, "nets": nets,
+            "geom": {"colGap": COL_GAP, "rowGap": ROW_GAP, "margin": MARGIN,
+                     "emptyW": EMPTY_COL_W, "top": g.geom.get("top", 20)}}
+
 
 def render_dot(g):
     """Graphviz source, for a deck too big for the built-in layout."""
@@ -511,6 +703,22 @@ input { width: 170px; }
   position: absolute; right: 12px; bottom: 10px; color: #8794a6;
   pointer-events: none;
 }
+#edit.on { background: #dcebff; border-color: #6f9ad6; }
+#editbar { display: none; gap: 8px; align-items: center; }
+#editbar.on { display: flex; }
+#dirty { color: #b06a00; }
+body.editing #scene .node { cursor: grab; }
+body.editing #scene .node.box-node rect { stroke-dasharray: none; }
+body.editing #scene .node.lift { cursor: grabbing; opacity: 0.85; }
+#dropzones rect { fill: transparent; }
+#dropzones rect.hot { fill: rgba(70,130,200,0.13); }
+#dropline { stroke: #2f6fb5; stroke-width: 3; display: none; }
+@media (prefers-color-scheme: dark) {
+  #edit.on { background: #24405e; border-color: #5b86bd; }
+  #dirty { color: #e0a952; }
+  #dropzones rect.hot { fill: rgba(120,170,230,0.16); }
+  #dropline { stroke: #8fb4d9; }
+}
 @media (prefers-color-scheme: dark) {
   body { background: #12161c; color: #e8edf4; }
   #bar { background: #1a212a; border-bottom-color: #333e4c; }
@@ -575,12 +783,20 @@ VIEWER_JS = r"""
   // Capture only once a drag is really under way.  Grabbing the pointer on
   // pointerdown retargets the click that follows to the <svg>, which would
   // make every click on a node read as a click on the background.
-  var drag = null, dragged = false;
+  var drag = null, dragged = false, editDrag = null, justArranged = false;
   svg.addEventListener('pointerdown', function (e) {
+    var node = e.target.closest ? e.target.closest('.node') : null;
+    if (node && window.__editorDown && window.__editorDown(e, node, at(e))) {
+      e.preventDefault();
+      svg.setPointerCapture(e.pointerId);
+      editDrag = e.pointerId;
+      return;                       // arranging, not panning
+    }
     drag = { p: at(e), tx: tx, ty: ty, x: e.clientX, y: e.clientY, id: e.pointerId };
     dragged = false;
   });
   svg.addEventListener('pointermove', function (e) {
+    if (editDrag !== null) { window.__editorMove(at(e)); return; }
     if (!drag) return;
     if (!dragged) {
       if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) < 4) return;
@@ -593,6 +809,13 @@ VIEWER_JS = r"""
     apply();
   });
   function endDrag() {
+    if (editDrag !== null) {
+      try { svg.releasePointerCapture(editDrag); } catch (err) {}
+      editDrag = null;
+      window.__editorUp();
+      justArranged = true;
+      return;
+    }
     if (drag && dragged) { try { svg.releasePointerCapture(drag.id); } catch (err) {} }
     drag = null;
   }
@@ -645,10 +868,14 @@ VIEWER_JS = r"""
   nodes.forEach(function (n) {
     n.addEventListener('click', function (e) {
       e.stopPropagation();
+      if (justArranged) { justArranged = false; return; }
       if (n.classList.contains('hot')) { clear(); } else { focus(n.id); }
     });
   });
-  svg.addEventListener('click', function () { if (!dragged) clear(); });
+  svg.addEventListener('click', function () {
+    if (justArranged) { justArranged = false; return; }
+    if (!dragged) clear();
+  });
 
   find.addEventListener('input', function () {
     var q = find.value.trim().toLowerCase();
@@ -676,19 +903,393 @@ VIEWER_JS = r"""
     else if (e.key === 'Escape') clear();
   });
 
+  // the editor compares against untransformed scene coordinates, so it
+  // needs the pan and zoom taken back out of the pointer position
+  window.__toScene = function (p) {
+    return { x: (p.x - tx) / k, y: (p.y - ty) / k };
+  };
+  window.__fit = fit;
   fit();
   window.addEventListener('resize', function () { apply(); });
 })();
 """
 
 
-def render_html(g, title="deck connectivity", header=()):
+EDITOR_JS = r"""
+(function () {
+  var D = window.DECK;
+  if (!D) return;
+  var svg = document.getElementById('deck-svg');
+  var scene = document.getElementById('scene');
+  var heads = document.getElementById('colheads');
+  var zones = document.getElementById('dropzones');
+  var dropline = document.getElementById('dropline');
+  var dirty = document.getElementById('dirty');
+  var SVGNS = 'http://www.w3.org/2000/svg';
+
+  var start = JSON.parse(JSON.stringify(
+    { columns: D.columns, boxes: D.boxes.map(function (b) {
+        return { id: b.id, col: b.col, row: b.row }; }) }));
+  var cols = D.columns.slice();
+  var place = {};                       // box id -> {col, row}
+  D.boxes.forEach(function (b) { place[b.id] = { col: b.col, row: b.row }; });
+  var byId = {}, cur = -1, editing = false, changed = false;
+  D.boxes.concat(D.nets).forEach(function (n) { byId[n.id] = n; });
+
+  var G = D.geom, geo = {};             // layer -> {x, w}
+
+  // The same rule the generator follows, step for step, so what you arrange
+  // here comes back identical when the deck is drawn again.  Instances stay
+  // where they were put; the nets between them are re-sorted by the same
+  // barycentre sweep the Python side runs.  If these two ever disagree the
+  // arrangement would shift the moment it was reloaded, which is the one
+  // failure that would make the whole feature pointless.
+  function orderLayers(layers, keys) {
+    var adj = {};
+    D.nets.forEach(function (n) {
+      n.boxes.forEach(function (bid) {
+        (adj[n.id] = adj[n.id] || []).push(bid);
+        (adj[bid] = adj[bid] || []).push(n.id);
+      });
+    });
+    var ord = {};
+    D.boxes.forEach(function (b) { ord[b.id] = place[b.id].row; });
+    D.nets.forEach(function (n, i) { ord[n.id] = i; });
+
+    keys.forEach(function (lay) {
+      layers[lay].sort(function (a, b) { return ord[a.id] - ord[b.id]; });
+      layers[lay].forEach(function (n, i) { ord[n.id] = i; });
+    });
+
+    for (var pass = 0; pass < 4; pass++) {
+      var seq = pass % 2 === 0 ? keys : keys.slice().reverse();
+      seq.forEach(function (lay) {
+        layers[lay].forEach(function (n) {
+          if (place[n.id]) return;            // an instance stays put
+          var peers = (adj[n.id] || []).filter(function (pid) {
+            return Math.abs(layerOf(pid) - lay) === 1; });
+          if (peers.length) {
+            var sum = 0;
+            peers.forEach(function (pid) { sum += ord[pid]; });
+            ord[n.id] = sum / peers.length;
+          }
+        });
+        layers[lay].sort(function (a, b) { return ord[a.id] - ord[b.id]; });
+        layers[lay].forEach(function (n, i) { ord[n.id] = i; });
+      });
+    }
+    return ord;
+  }
+
+  var layerCache = {};
+  function layerOf(id) { return layerCache[id]; }
+
+  function relayout() {
+    var layers = {};
+    layerCache = {};
+    D.boxes.forEach(function (b) {
+      var lay = place[b.id].col * 2;
+      layerCache[b.id] = lay;
+      (layers[lay] = layers[lay] || []).push(b);
+    });
+    D.nets.forEach(function (n) {
+      var lay = 1;
+      if (n.boxes.length) {
+        lay = Math.min.apply(null, n.boxes.map(function (id) {
+          return place[id].col * 2; })) + 1;
+      }
+      layerCache[n.id] = lay;
+      (layers[lay] = layers[lay] || []).push(n);
+    });
+
+    cols.forEach(function (_, c) { layers[c * 2] = layers[c * 2] || []; });
+    var keys = Object.keys(layers).map(Number).sort(function (a, b) {
+      return a - b; });
+    orderLayers(layers, keys);
+
+    var x = G.margin, tallest = 0, heights = {};
+    geo = {};
+    keys.forEach(function (lay) {
+      var wide = G.emptyW, h = 0;
+      if (layers[lay].length) {
+        wide = 0;
+        layers[lay].forEach(function (n) {
+          wide = Math.max(wide, n.w); h += n.h + G.rowGap; });
+        h -= G.rowGap;
+      }
+      geo[lay] = { x: x, w: wide };
+      heights[lay] = h;
+      tallest = Math.max(tallest, h);
+      x += wide + G.colGap;
+    });
+
+    keys.forEach(function (lay) {
+      var y = G.margin + (tallest - heights[lay]) / 2 + G.top;
+      layers[lay].forEach(function (n, idx) {
+        n.nx = geo[lay].x + (geo[lay].w - n.w) / 2;
+        n.ny = y;
+        y += n.h + G.rowGap;
+        if (place[n.id]) place[n.id].row = idx;
+      });
+    });
+
+    D.boxes.concat(D.nets).forEach(function (n) {
+      var el = document.getElementById(n.id);
+      if (el) el.setAttribute('transform', 'translate(' +
+        (n.nx - n.x).toFixed(2) + ' ' + (n.ny - n.y).toFixed(2) + ')');
+    });
+    redrawWires();
+    drawHeads();
+  }
+
+  function clip(cx, cy, tx, ty, n) {
+    var dx = tx - cx, dy = ty - cy;
+    if (!dx && !dy) return [cx, cy];
+    var hw = n.w / 2 + 1, hh = n.h / 2 + 1;
+    var k = Math.min(dx ? hw / Math.abs(dx) : 1e9, dy ? hh / Math.abs(dy) : 1e9);
+    return [cx + dx * k, cy + dy * k];
+  }
+
+  function redrawWires() {
+    [].forEach.call(scene.querySelectorAll('.wire-of'), function (w) {
+      var a = byId[w.dataset.net], b = byId[w.dataset.box];
+      if (!a || !b) return;
+      var ax = a.nx + a.w / 2, ay = a.ny + a.h / 2;
+      var bx = b.nx + b.w / 2, by = b.ny + b.h / 2;
+      var p = clip(ax, ay, bx, by, a), q = clip(bx, by, ax, ay, b);
+      w.setAttribute('d', 'M ' + p[0].toFixed(1) + ' ' + p[1].toFixed(1) +
+                          ' L ' + q[0].toFixed(1) + ' ' + q[1].toFixed(1));
+    });
+  }
+
+  function bounds() {
+    var t = 1e9, b = -1e9;
+    D.boxes.concat(D.nets).forEach(function (n) {
+      t = Math.min(t, n.ny); b = Math.max(b, n.ny + n.h); });
+    return { top: t === 1e9 ? G.top : t, bottom: b === -1e9 ? G.top + 100 : b };
+  }
+
+  function drawHeads() {
+    heads.textContent = ''; zones.textContent = '';
+    if (!editing) return;
+    var bb = bounds();
+    cols.forEach(function (name, c) {
+      var g = geo[c * 2];
+      if (!g) return;
+      var t = document.createElementNS(SVGNS, 'text');
+      t.setAttribute('class', 'col');
+      t.setAttribute('x', g.x + g.w / 2);
+      t.setAttribute('y', bb.top - 14);
+      t.setAttribute('text-anchor', 'middle');
+      t.textContent = (c === cur ? '▸ ' : '') + name;
+      t.style.cursor = 'pointer';
+      t.onclick = function (e) { e.stopPropagation(); select(c); };
+      heads.appendChild(t);
+
+      var r = document.createElementNS(SVGNS, 'rect');
+      r.setAttribute('x', g.x - G.colGap / 2);
+      r.setAttribute('y', bb.top - 26);
+      r.setAttribute('width', g.w + G.colGap);
+      r.setAttribute('height', bb.bottom - bb.top + 40);
+      r.dataset.col = c;
+      zones.appendChild(r);
+    });
+  }
+
+  function select(c) {
+    cur = c;
+    drawHeads();
+    dirty.textContent = (changed ? 'unsaved  ' : '') +
+      (cur >= 0 ? '[' + cols[cur] + ']' : '');
+  }
+
+  function touch() {
+    changed = true;
+    select(cur);
+  }
+
+  // ---- dragging an instance into a column ------------------------------
+  var lift = null;
+
+  function columnAt(x) {
+    var best = 0, bestd = 1e9;
+    cols.forEach(function (_, c) {
+      var g = geo[c * 2];
+      if (!g) return;
+      var d = Math.abs(x - (g.x + g.w / 2));
+      if (d < bestd) { bestd = d; best = c; }
+    });
+    return best;
+  }
+
+  function rowAt(col, y, movingId) {
+    var members = D.boxes.filter(function (b) {
+      return place[b.id].col === col && b.id !== movingId; });
+    members.sort(function (a, b) { return place[a.id].row - place[b.id].row; });
+    for (var i = 0; i < members.length; i++) {
+      if (y < members[i].ny + members[i].h / 2) return { index: i, members: members };
+    }
+    return { index: members.length, members: members };
+  }
+
+  window.__editorDown = function (e, node, pt) {
+    if (!editing || !node.classList.contains('box-node')) return false;
+    lift = { id: node.id, node: node, start: window.__toScene(pt) };
+    node.classList.add('lift');
+    return true;
+  };
+
+  window.__editorMove = function (raw) {
+    if (!lift) return false;
+    var pt = window.__toScene(raw);
+    var col = columnAt(pt.x);
+    var spot = rowAt(col, pt.y, lift.id);
+    var g = geo[col * 2] || { x: G.margin, w: 130 };
+    var y;
+    if (spot.members.length === 0) { y = bounds().top; }
+    else if (spot.index === 0) { y = spot.members[0].ny - G.rowGap / 2; }
+    else { var m = spot.members[spot.index - 1]; y = m.ny + m.h + G.rowGap / 2; }
+    dropline.setAttribute('x1', g.x); dropline.setAttribute('x2', g.x + g.w);
+    dropline.setAttribute('y1', y); dropline.setAttribute('y2', y);
+    dropline.style.display = 'block';
+    [].forEach.call(zones.children, function (r) {
+      r.classList.toggle('hot', Number(r.dataset.col) === col); });
+    lift.drop = { col: col, index: spot.index, members: spot.members };
+    return true;
+  };
+
+  window.__editorUp = function () {
+    if (!lift) return false;
+    lift.node.classList.remove('lift');
+    dropline.style.display = 'none';
+    [].forEach.call(zones.children, function (r) { r.classList.remove('hot'); });
+    if (lift.drop) {
+      var d = lift.drop;
+      d.members.splice(d.index, 0, { id: lift.id });
+      d.members.forEach(function (m, i) {
+        place[m.id].col = d.col; place[m.id].row = i; });
+      place[lift.id].col = d.col;
+      touch();
+      relayout();
+    }
+    lift = null;
+    return true;
+  };
+
+  // ---- the toolbar -----------------------------------------------------
+  document.getElementById('edit').onclick = function () {
+    editing = !editing;
+    this.classList.toggle('on', editing);
+    document.body.classList.toggle('editing', editing);
+    document.getElementById('editbar').classList.toggle('on', editing);
+    if (editing && cur < 0) select(cols.length - 1); else select(cur);
+    relayout();
+  };
+
+  document.getElementById('addcol').onclick = function () {
+    var at = cur < 0 ? cols.length : cur + 1;
+    cols.splice(at, 0, 'column ' + (cols.length + 1));
+    D.boxes.forEach(function (b) {
+      if (place[b.id].col >= at) place[b.id].col += 1; });
+    cur = at; touch(); relayout(); window.__fit();
+  };
+
+  document.getElementById('delcol').onclick = function () {
+    if (cur < 0) return;
+    if (cols.length < 2) { alert('a deck needs at least one column'); return; }
+    var here = D.boxes.filter(function (b) { return place[b.id].col === cur; });
+    if (here.length) {
+      // moving them somewhere arbitrary would lose an arrangement someone
+      // made on purpose; better to say so than to guess
+      alert('column "' + cols[cur] + '" still holds ' + here.length +
+            ' instance(s). Drag them out first.');
+      return;
+    }
+    cols.splice(cur, 1);
+    D.boxes.forEach(function (b) {
+      if (place[b.id].col > cur) place[b.id].col -= 1; });
+    cur = Math.min(cur, cols.length - 1);
+    touch(); relayout(); window.__fit();
+  };
+
+  document.getElementById('rencol').onclick = function () {
+    if (cur < 0) return;
+    var name = prompt('column name', cols[cur]);
+    if (name === null) return;
+    cols[cur] = name.trim() || cols[cur];
+    touch(); relayout();
+  };
+
+  function layoutJSON() {
+    var elements = {}, names = D.boxes.map(function (b) { return b.name; });
+    names.sort();
+    D.boxes.slice().sort(function (a, b) {
+      return a.name < b.name ? -1 : 1; }).forEach(function (b) {
+        elements[b.name] = { column: place[b.id].col,
+                             row: Math.round(place[b.id].row) };
+      });
+    return JSON.stringify({
+      version: 1,
+      columns: cols.map(function (n) { return { name: n }; }),
+      elements: elements
+    }, null, 2) + '\n';
+  }
+
+  document.getElementById('save').onclick = function () {
+    var blob = new Blob([layoutJSON()], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (D.name || 'deck') + '.layout.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    changed = false; select(cur);
+  };
+
+  document.getElementById('copy').onclick = function () {
+    var text = layoutJSON();
+    var done = function () { dirty.textContent = 'copied'; 
+      setTimeout(function () { select(cur); }, 1200); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { fallback(); });
+    } else { fallback(); }
+    function fallback() {
+      // a file:// page often has no clipboard permission, and losing the
+      // arrangement to a denied promise would be worse than a text box
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.top = '40px';
+      ta.style.left = '10px'; ta.style.width = '60%'; ta.style.height = '60%';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch (err) { /* shown */ }
+      ta.onblur = function () { ta.remove(); };
+    }
+  };
+
+  document.getElementById('revert').onclick = function () {
+    cols = start.columns.slice();
+    start.boxes.forEach(function (b) {
+      place[b.id] = { col: b.col, row: b.row }; });
+    changed = false; cur = Math.min(cur, cols.length - 1);
+    select(cur); relayout(); window.__fit();
+  };
+
+  window.__relayout = relayout;
+  relayout();
+})();
+"""
+
+
+def render_html(g, title="deck connectivity", header=(), layout=None):
     """The same picture, in a viewer you can get around a big deck with."""
-    svg = render_svg(g, title=title, header=header, embed_header=False)
+    svg = render_svg(g, title=title, header=header, embed_header=False,
+                     layout=layout)
     notes = []
     for line in header:
         notes.append("<b>%s</b>" % _esc(line) if line.startswith("INCOMPLETE")
                      else _esc(line))
+    import json
+    st = viewer_state(g)
+    st["name"] = os.path.splitext(title)[0] or "deck"
+    state = json.dumps(st)
     return """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -706,14 +1307,27 @@ def render_html(g, title="deck connectivity", header=()):
   <button id="fit" title="fit to window (0)">fit</button>
   <button id="one" title="actual size">1:1</button>
   <input id="find" type="search" placeholder="find net or instance  (/)">
+  <button id="edit" title="arrange the columns by hand">edit layout</button>
+  <span id="editbar">
+    <button id="addcol">+ column</button>
+    <button id="delcol">- column</button>
+    <button id="rencol">rename</button>
+    <button id="save">save layout.json</button>
+    <button id="copy">copy</button>
+    <button id="revert">revert</button>
+    <span id="dirty"></span>
+  </span>
   <span id="notes">%(notes)s</span>
 </div>
 <div id="stage">
 %(svg)s
 <div id="hint">wheel: zoom &middot; drag: pan &middot; click: trace a net</div>
 </div>
+<script>window.DECK = %(state)s;</script>
 <script>%(js)s</script>
+<script>%(editjs)s</script>
 </body>
 </html>
 """ % {"title": _esc(title), "css": VIEWER_CSS, "js": VIEWER_JS,
-       "svg": svg, "notes": " &middot; ".join(notes)}
+       "svg": svg, "notes": " &middot; ".join(notes), "state": state,
+       "editjs": EDITOR_JS}

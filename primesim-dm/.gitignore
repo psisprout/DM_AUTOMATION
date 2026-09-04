@@ -4,6 +4,7 @@ examples/out/
 *.svg
 *.dot
 *.html
+*.layout.json
 *.sp.report.txt
 __pycache__/
 *.pyc

@@ -317,6 +317,17 @@ def cmd_graph(args):
     if not dk.files:
         return _err("could not read any of: %s" % ", ".join(args.deck))
 
+    layout = None
+    if args.layout and os.path.isfile(args.layout):
+        with open(args.layout, encoding="utf-8", errors="replace") as fh:
+            try:
+                layout = graph_mod.load_layout(fh.read(), args.layout)
+            except graph_mod.LayoutError as exc:
+                return _err(str(exc))
+    elif args.layout:
+        print("%s does not exist yet - drawing the automatic layout. "
+              "Arrange it in the viewer and save it there." % args.layout)
+
     rails = () if args.no_rails else (
         list(graph_mod.DEFAULT_RAILS) + (args.rail or []))
     g = graph_mod.build(dk, rails=rails, group_buses=not args.no_bus_groups,
@@ -325,6 +336,8 @@ def cmd_graph(args):
     # the picture is only as complete as the read that produced it, so it
     # says on its face what was left out - same reason lint prints a header
     header = ["%d element(s), %d net node(s)" % (len(g.boxes), len(g.nets))]
+    if layout is not None:
+        header.append("columns from %s" % os.path.basename(args.layout))
     floating = [n for n in g.nets if n.floating]
     if floating:
         header.append("%d one-sided net node(s), drawn in red"
@@ -344,9 +357,14 @@ def cmd_graph(args):
     if fmt == "dot":
         text = graph_mod.render_dot(g)
     elif fmt == "html":
-        text = graph_mod.render_html(g, title=title, header=header)
+        text = graph_mod.render_html(g, title=title, header=header,
+                                     layout=layout)
     else:
-        text = graph_mod.render_svg(g, title=title, header=header)
+        text = graph_mod.render_svg(g, title=title, header=header,
+                                    layout=layout)
+    if g.unplaced:
+        header.append("%d instance(s) the layout does not place, in a column "
+                      "of their own" % g.unplaced)
 
     if args.output:
         parent = os.path.dirname(os.path.abspath(args.output))
@@ -359,6 +377,12 @@ def cmd_graph(args):
             print("  %s" % line)
     else:
         sys.stdout.write(text)
+
+    if args.save_layout:
+        with open(args.save_layout, "w", encoding="utf-8",
+                  newline="\n") as fh:
+            fh.write(graph_mod.dump_layout(graph_mod.layout_of(g)))
+        print("wrote %s" % args.save_layout)
     return 0
 
 
@@ -493,6 +517,13 @@ def build_parser():
                    help="draw supplies as ordinary nets (expect a hairball)")
     s.add_argument("--no-bus-groups", action="store_true",
                    help="draw dq0..dq7 as eight nets rather than one bus")
+    s.add_argument("--layout", metavar="FILE",
+                   help="column arrangement to draw with, as saved from the "
+                        "html viewer. Missing file: the automatic layout is "
+                        "drawn instead")
+    s.add_argument("--save-layout", metavar="FILE",
+                   help="write the arrangement being drawn to a layout file, "
+                        "as a starting point to edit")
     s.add_argument("--max-elements", type=int, default=80, metavar="N",
                    help="draw at most N elements, the best-connected first "
                         "(default 80)")

@@ -212,7 +212,7 @@ class HtmlTest(unittest.TestCase):
 
     def test_every_wire_points_at_nodes_that_exist(self):
         svg = graph_mod.render_svg(self.graph())
-        ids = set(re.findall(r'<g class="node" id="([^"]+)"', svg))
+        ids = set(re.findall(r'<g class="node[^"]*" id="([^"]+)"', svg))
         pairs = re.findall(r'data-net="([^"]+)" data-box="([^"]+)"', svg)
         self.assertTrue(pairs)
         for net, box in pairs:
@@ -233,10 +233,13 @@ class HtmlTest(unittest.TestCase):
         # these run where there is no pip and no internet; a viewer that
         # fetches a library is a viewer that shows a blank page
         html = graph_mod.render_html(self.graph())
-        stripped = html.replace('xmlns="http://www.w3.org/2000/svg"', "")
+        # the SVG namespace URI is an identifier, never fetched; anything
+        # else pointing outward would be
+        stripped = html.replace("http://www.w3.org/2000/svg", "")
         self.assertNotIn("http://", stripped)
         self.assertNotIn("https://", stripped)
         self.assertNotIn("<script src", html)
+        self.assertNotIn("<link", html)
 
     def test_html_does_not_repeat_the_header_inside_the_svg(self):
         html = graph_mod.render_html(self.graph(), title="t.sp",
@@ -255,6 +258,108 @@ class HtmlTest(unittest.TestCase):
         self.assertEqual(cli_mod._graph_format("deck.gv"), "dot")
         self.assertEqual(cli_mod._graph_format("deck.svg"), "svg")
         self.assertEqual(cli_mod._graph_format(None), "svg")
+
+
+class LayoutFileTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    DECK = """* t
+XTX txp sub
+XCH txp rxp sub
+XRX rxp sub
+"""
+
+    def graph(self):
+        return graph_mod.build(read_text(self.tmp, self.DECK))
+
+    def test_round_trip_through_the_file(self):
+        text = graph_mod.dump_layout(graph_mod.Layout(
+            ["TX", "RX"], {"XTX": {"column": 0, "row": 0},
+                           "XCH": {"column": 0, "row": 1},
+                           "XRX": {"column": 1, "row": 0}}))
+        back = graph_mod.load_layout(text)
+        self.assertEqual(back.columns, ["TX", "RX"])
+        self.assertEqual(back.column_of("XCH"), 0)
+        self.assertEqual(graph_mod.dump_layout(back), text)
+
+    def test_columns_come_from_the_file(self):
+        lay = graph_mod.load_layout(graph_mod.dump_layout(graph_mod.Layout(
+            ["left", "middle", "right"],
+            {"XTX": {"column": 0, "row": 0},
+             "XCH": {"column": 1, "row": 0},
+             "XRX": {"column": 2, "row": 0}})))
+        g = self.graph()
+        graph_mod.render_svg(g, layout=lay)
+        cols = {b.name: b.layer // 2 for b in g.boxes}
+        self.assertEqual(cols, {"XTX": 0, "XCH": 1, "XRX": 2})
+        self.assertEqual(g.columns, ["left", "middle", "right"])
+        self.assertEqual(g.unplaced, 0)
+
+    def test_a_hand_set_row_is_not_reshuffled(self):
+        lay = graph_mod.load_layout(graph_mod.dump_layout(graph_mod.Layout(
+            ["all"], {"XTX": {"column": 0, "row": 2},
+                      "XCH": {"column": 0, "row": 1},
+                      "XRX": {"column": 0, "row": 0}})))
+        g = self.graph()
+        graph_mod.render_svg(g, layout=lay)
+        order = sorted(g.boxes, key=lambda b: b.y)
+        self.assertEqual([b.name for b in order], ["XRX", "XCH", "XTX"])
+
+    def test_an_instance_the_file_never_heard_of_gets_its_own_column(self):
+        lay = graph_mod.load_layout(graph_mod.dump_layout(graph_mod.Layout(
+            ["known"], {"XTX": {"column": 0, "row": 0}})))
+        g = self.graph()
+        graph_mod.render_svg(g, layout=lay)
+        self.assertEqual(g.unplaced, 2)
+        self.assertEqual(g.columns[-1], "unplaced")
+        self.assertEqual({b.name for b in g.boxes if b.layer // 2 == 1},
+                         {"XCH", "XRX"})
+
+    def test_an_emptied_column_keeps_its_place(self):
+        lay = graph_mod.load_layout(graph_mod.dump_layout(graph_mod.Layout(
+            ["a", "gap", "b"], {"XTX": {"column": 0, "row": 0},
+                                "XCH": {"column": 0, "row": 1},
+                                "XRX": {"column": 2, "row": 0}})))
+        g = self.graph()
+        graph_mod.render_svg(g, layout=lay)
+        # column 1 holds nothing, but the boxes right of it must not slide
+        # left into the space, or the arrangement would drift every reload
+        self.assertIn(2, g.geom["x"])
+        self.assertEqual(g.geom["width"][2], graph_mod.EMPTY_COL_W)
+        self.assertTrue(g.geom["x"][4] > g.geom["x"][2])
+
+    def test_layout_of_reads_the_arrangement_back(self):
+        g = self.graph()
+        graph_mod.render_svg(g)
+        lay = graph_mod.layout_of(g)
+        self.assertEqual(len(lay.columns), len(g.columns))
+        for box in g.boxes:
+            self.assertEqual(lay.column_of(box.name), box.layer // 2)
+
+    def test_bad_layouts_are_refused_not_ignored(self):
+        # silently falling back would look like the hand arrangement was lost
+        for text, why in (
+                ("not json", "invalid JSON"),
+                ('[]', "not an object"),
+                ('{"columns": []}', "no columns"),
+                ('{"columns":[{"name":"a"}],"elements":{"X":{"column":9}}}',
+                 "column out of range"),
+                ('{"columns":[{"name":"a"}],"elements":{"X":"nope"}}',
+                 "element not an object"),
+                ('{"columns":[{"name":"a"}],"elements":{"X":{"column":"z"}}}',
+                 "non-numeric")):
+            with self.assertRaises(graph_mod.LayoutError, msg=why):
+                graph_mod.load_layout(text)
+
+    def test_columns_may_be_plain_strings(self):
+        lay = graph_mod.load_layout('{"columns": ["TX", "RX"]}')
+        self.assertEqual(lay.columns, ["TX", "RX"])
 
 
 class LayoutTest(unittest.TestCase):
