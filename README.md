@@ -21,8 +21,67 @@ python -m sparabbs.cli --help   # the same engine, headless
 ```
 
 Needs Python 3.9+, numpy, and one Qt binding (PyQt5, PyQt6, PySide2 or
-PySide6) for the GUI. `matplotlib` is optional and only used by *Plot selected
-term*. The CLI needs no Qt at all.
+PySide6) for the GUI; `pip install -r requirements.txt` covers it. `matplotlib`
+is optional and only used by *Plot selected term*. The CLI needs no Qt at all.
+Runs on Windows, Linux and macOS.
+
+### Windows + VS Code
+
+```powershell
+git clone <this repo>
+cd DM_AUTOMATION
+py -3 -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python -m sparabbs.gui
+```
+
+In VS Code: open the folder, **Ctrl+Shift+P → Python: Select Interpreter →**
+`.venv`, then **F5 → sparabbs GUI**. `.vscode/launch.json` also has CLI
+configurations, and `.vscode/tasks.json` has *launch GUI* / *run all tests*
+under **Ctrl+Shift+P → Run Task**.
+
+If `python` is not on PATH, use `py -3` instead. PowerShell may refuse to run
+the activate script; either
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or just call
+`.venv\Scripts\python.exe -m sparabbs.gui` directly.
+
+**Where the simulator runs.** `primesim_sub` is normally a Linux farm submit
+command and will not exist on Windows, so the usual split is:
+
+| Step | Where |
+|---|---|
+| 1 Inputs, 2 *Generate deck* | Windows GUI |
+| run the deck | Linux farm |
+| 3 Reference node, 4 Compare | Windows GUI, pointing *S-parameters produced* at the returned `.sNp` |
+
+*Generate deck* and *Run SPICE* are separate buttons for exactly this reason:
+generating never needs the simulator. Decks are written with LF endings so a
+deck generated on Windows runs unchanged on the farm.
+
+If the farm is reachable from the Windows box you can still drive it from the
+GUI by putting the remote call in the command box, e.g.
+
+```
+plink -batch farm "cd /proj/run1 && primesim_sub -spice -cpu {cpu} -i {deck}"
+```
+
+as long as the working directory is a share both sides see, so the `.sNp`
+lands where the GUI looks for it. Otherwise leave the run to the farm and use
+the *Browse...* button next to *S-parameters produced*.
+
+A Windows path in the command box is kept intact (POSIX-style splitting would
+eat the backslashes); quote it if it contains spaces. A `.bat` or `.cmd`
+launcher needs `cmd /c` in front of it.
+
+Everything except *Run SPICE* works with no simulator present, so the whole
+tool can also be exercised on the bundled fixtures:
+
+```powershell
+python tests\make_fixtures.py
+python -m sparabbs.cli --snp tests\data\pdn3.s3p --bbs tests\data\pdn3_bbs.sp ^
+    --out run1 --ground-pins GND --use-snp tests\data\pdn3_bbs.s3p
+```
 
 ### The four steps
 

@@ -299,7 +299,7 @@ class MainWindow(QtCore.QObject):
         except (OSError, deck_mod.DeckError) as exc:
             self._warn("Cannot write the deck", str(exc))
             return None
-        with open(self.deck_path) as fh:
+        with open(self.deck_path, encoding="utf-8", errors="replace") as fh:
             self.ui.textDeck.setPlainText(fh.read())
         self.ui.editResultSnp.setText(cfg.expected_snp())
         self.ui.tabs.setCurrentWidget(self.ui.tabRun)

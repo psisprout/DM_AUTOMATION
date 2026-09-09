@@ -1,0 +1,30 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "sparabbs: make test fixtures",
+      "type": "shell",
+      "command": "python tests/make_fixtures.py",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "sparabbs: run all tests",
+      "type": "shell",
+      "command": "python -m unittest discover -s tests -t .",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "QT_QPA_PLATFORM": "offscreen" }
+      },
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "sparabbs: launch GUI",
+      "type": "shell",
+      "command": "python -m sparabbs.gui",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    }
+  ]
+}

@@ -13,6 +13,27 @@ from typing import Callable, Iterable
 #: the user's launcher; {deck}, {cpu} and {dir} are substituted
 DEFAULT_COMMAND = "primesim_sub -spice -cpu {cpu} -i {deck}"
 
+_WINDOWS = os.name == "nt"
+
+
+def split_command(text: str) -> list[str]:
+    """Split a command line into argv the way the host platform expects.
+
+    POSIX splitting treats a backslash as an escape, which silently destroys
+    every Windows path in the template (``C:\\work\\d.sp`` -> ``C:workd.sp``),
+    so on Windows the backslashes are kept and surrounding quotes stripped by
+    hand instead.
+    """
+    if not _WINDOWS:
+        return shlex.split(text)
+    out = []
+    for tok in shlex.split(text, posix=False):
+        if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in "\"'":
+            tok = tok[1:-1]
+        out.append(tok)
+    return out
+
+
 
 class RunnerError(RuntimeError):
     """Raised when the simulator cannot be launched."""
@@ -37,13 +58,15 @@ class RunSpec:
             cpu=self.cpu,
             dir=self.work_dir(),
         )
-        argv = shlex.split(text)
+        argv = split_command(text)
         if not argv:
             raise RunnerError("the run command is empty")
         return argv
 
     def display(self) -> str:
-        return " ".join(shlex.quote(a) for a in self.argv())
+        return subprocess.list2cmdline(self.argv()) if _WINDOWS else " ".join(
+            shlex.quote(a) for a in self.argv()
+        )
 
 
 @dataclass

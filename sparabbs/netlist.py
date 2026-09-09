@@ -79,7 +79,7 @@ def _pin_tokens(rest: str) -> list[str]:
 
 def read_netlist(path: str) -> NetlistInfo:
     """Scan a SPICE file for .subckt definitions and X instantiations."""
-    with open(path, "r", errors="replace") as fh:
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
         lines = fh.readlines()
 
     subckts: list[Subckt] = []

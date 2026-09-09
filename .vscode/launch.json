@@ -1,0 +1,64 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "sparabbs GUI",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "sparabbs.gui",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": false
+    },
+    {
+      "name": "sparabbs CLI (deck only)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "sparabbs.cli",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "args": [
+        "--snp", "${input:snpFile}",
+        "--bbs", "${input:bbsFile}",
+        "--out", "${workspaceFolder}/run1",
+        "--no-run"
+      ],
+      "justMyCode": false
+    },
+    {
+      "name": "sparabbs CLI (compare an existing .sNp)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "sparabbs.cli",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "args": [
+        "--snp", "${input:snpFile}",
+        "--bbs", "${input:bbsFile}",
+        "--out", "${workspaceFolder}/run1",
+        "--use-snp", "${input:resultFile}"
+      ],
+      "justMyCode": false
+    }
+  ],
+  "inputs": [
+    {
+      "id": "snpFile",
+      "type": "promptString",
+      "description": "Reference Touchstone file (a.snp)",
+      "default": "tests/data/pdn3.s3p"
+    },
+    {
+      "id": "bbsFile",
+      "type": "promptString",
+      "description": "BBS netlist (a_sp.sp)",
+      "default": "tests/data/pdn3_bbs.sp"
+    },
+    {
+      "id": "resultFile",
+      "type": "promptString",
+      "description": "S-parameters the simulator produced",
+      "default": "tests/data/pdn3_bbs.s3p"
+    }
+  ]
+}
