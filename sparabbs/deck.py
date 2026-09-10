@@ -133,16 +133,51 @@ def validate(cfg: DeckConfig) -> list[str]:
             problems.append(
                 f"port {a.port} returns to net {a.minus!r}, which no pin drives"
             )
-    grounded = any(a.role == ROLE_GROUND for a in cfg.assignments)
-    leaky = any(a.role == ROLE_FLOAT for a in cfg.assignments)
-    if not grounded and not leaky:
-        problems.append(
-            "no pin is tied to global ground and none is left floating - the "
-            "network would have no DC path to ground"
-        )
+    problems += _floating_nets(cfg)
     if cfg.freq.size == 0:
         problems.append("frequency grid is empty")
     return problems
+
+
+def _floating_nets(cfg: DeckConfig) -> list[str]:
+    """Report nets the deck leaves with no path to global ground.
+
+    A port element bridges its two nodes with z0, a float pin gets a leak
+    resistor to 0 and a ground pin *is* 0, so almost every pin map is fine -
+    including the common one where every pin is a port returning to 0 and no
+    pin is grounded at all.  Only a pin map whose ports reference each other in
+    a closed loop can strand a net, and that is what this catches.
+    """
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for a in cfg.assignments:
+        find(a.net)
+        if a.role == ROLE_PORT:
+            union(a.net, a.minus)  # the port's z0 bridges these two nodes
+        else:
+            union(a.net, GROUND)  # tied to 0, or leaked to 0 through Rleak
+
+    stranded = sorted({a.net for a in cfg.assignments if find(a.net) != find(GROUND)})
+    if not stranded:
+        return []
+    return [
+        f"net(s) {stranded} have no path to global ground - every port there "
+        "returns to another port's node, so the AC solve would be singular. "
+        "Give one of those pins the 'ground' or 'float' role, or point a "
+        "port's 'Returns to' at 0."
+    ]
 
 
 def sweep_points(cfg: DeckConfig) -> np.ndarray:

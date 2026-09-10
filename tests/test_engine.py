@@ -406,6 +406,42 @@ class DeckTests(unittest.TestCase):
             text = deck_mod.build_deck(self._cfg(tmp, assignments=a))
         self.assertIn("P1 VDD_CORE GND port=1", text)
 
+    def test_every_pin_a_port_with_no_ground_pin_is_fine(self):
+        """The commonest BBS form: N pins for N ports, referenced to node 0.
+
+        Each port element bridges its node to 0 through z0, so nothing is
+        floating and the pin map needs no editing at all.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            bbs = os.path.join(tmp, "flat.sp")
+            with open(bbs, "w") as fh:
+                fh.write(
+                    ".subckt flat VDD_CORE VDD_IO VDD_PMIC\n"
+                    "R1 VDD_CORE 0 1\n.ends\n"
+                )
+            sub = read_netlist(bbs).by_name("flat")
+            cfg = deck_mod.config_from_inputs(self.ref, sub, bbs, tmp)
+            self.assertEqual(deck_mod.validate(cfg), [])
+            text = deck_mod.build_deck(cfg)
+        self.assertIn("P1 VDD_CORE 0 port=1 z0=50", text)
+        self.assertIn("XDUT VDD_CORE VDD_IO VDD_PMIC flat", text)
+        self.assertNotIn("Rleak", text)
+
+    def test_ports_returning_only_to_each_other_are_rejected(self):
+        a = deck_mod.default_assignments(self.sub, 3)
+        a[3].role = deck_mod.ROLE_FLOAT  # so the GND pin no longer ties to 0
+        a[0].minus, a[1].minus, a[2].minus = a[1].net, a[2].net, a[0].net
+        with tempfile.TemporaryDirectory() as tmp:
+            problems = deck_mod.validate(self._cfg(tmp, assignments=a))
+        self.assertTrue(any("no path to global ground" in p for p in problems))
+
+    def test_a_port_returning_to_a_float_pin_is_fine(self):
+        a = deck_mod.default_assignments(self.sub, 3)
+        a[3].role = deck_mod.ROLE_FLOAT
+        a[0].minus = a[3].net  # returns to the leaked net, which reaches 0
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(deck_mod.validate(self._cfg(tmp, assignments=a)), [])
+
     def test_validate_reports_a_missing_port(self):
         """Grounding a port pin leaves that reference port undriven."""
         a = deck_mod.default_assignments(self.sub, 3)
