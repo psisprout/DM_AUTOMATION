@@ -7,13 +7,15 @@ without Qt, and so the same idioms are available from a script.
 from __future__ import annotations
 
 import fnmatch
-from typing import Iterable, Sequence
+from typing import Iterable, Sequence, Tuple
 
 import numpy as np
 
 from .compare import FAIL, WARN, CompareResult
 
-Term = tuple[int, int]  # 1-based (i, j)
+# typing.Tuple, not tuple[...]: this is evaluated at import time, and a
+# builtin generic is only subscriptable from Python 3.9
+Term = Tuple[int, int]  # 1-based (i, j)
 
 #: what a plot draws on its y axis
 MODE_MAG = "mag"
