@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import time
 import unittest
 
 import numpy as np
@@ -660,3 +661,119 @@ class CliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OutputWatcherTests(unittest.TestCase):
+    """A submit launcher exits before the results exist; the watcher must wait."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = self.tmp.name
+
+    def _write(self, name, text="x"):
+        path = os.path.join(self.dir, name)
+        with open(path, "w") as fh:
+            fh.write(text)
+        return path
+
+    def test_reports_nothing_while_the_directory_is_empty(self):
+        w = runner_mod.OutputWatcher(self.dir, 3)
+        self.assertEqual(w.poll(), ("", []))
+
+    def test_waits_until_the_file_stops_growing(self):
+        w = runner_mod.OutputWatcher(self.dir, 3, stable_polls=2)
+        self._write("out.s3p", "partial")
+        self.assertEqual(w.poll()[0], "", "a file still being written is not ready")
+        self._write("out.s3p", "partial and more")
+        self.assertEqual(w.poll()[0], "", "size changed, so the countdown restarts")
+        self.assertEqual(w.poll()[0], "", "one steady poll is not yet enough")
+        self.assertTrue(w.poll()[0].endswith("out.s3p"))
+
+    def test_an_empty_file_is_never_accepted(self):
+        w = runner_mod.OutputWatcher(self.dir, 3, stable_polls=1)
+        self._write("out.s3p", "")
+        for _ in range(4):
+            self.assertEqual(w.poll()[0], "")
+
+    def test_reports_files_as_they_appear(self):
+        self._write("deck.sp")  # written before the watch starts
+        w = runner_mod.OutputWatcher(self.dir, 3)
+        self.assertEqual(w.poll()[1], [], "pre-existing files are not 'new'")
+        self._write("ac0.ac")
+        self.assertEqual(w.poll()[1], ["ac0.ac"])
+        self.assertEqual(w.poll()[1], [], "already-seen files are not re-reported")
+        self._write("lin0.lin")
+        self.assertEqual(w.poll()[1], ["lin0.lin"])
+        self.assertEqual(w.produced(), ["ac0.ac", "lin0.lin"])
+
+    def test_produced_lists_what_the_run_wrote(self):
+        self._write("a_sp.sp")  # an input that was already there
+        w = runner_mod.OutputWatcher(self.dir, 24)
+        self._write("ac0.ac")
+        self._write("lin0.lin")
+        self.assertEqual(w.produced(), ["ac0.ac", "lin0.lin"])
+        self.assertEqual(w.poll()[0], "", "a .lin is not a Touchstone file")
+
+    def test_wait_for_output_returns_a_file_that_arrives_late(self):
+        import threading
+
+        w = runner_mod.OutputWatcher(self.dir, 3, stable_polls=1)
+        threading.Timer(0.25, lambda: self._write("late.s3p", "data")).start()
+        got = runner_mod.wait_for_output(w, timeout=10, poll_interval=0.05)
+        self.assertTrue(got.endswith("late.s3p"))
+
+    def test_wait_for_output_times_out(self):
+        w = runner_mod.OutputWatcher(self.dir, 3)
+        events = []
+        self._write("ac0.ac")
+        got = runner_mod.wait_for_output(
+            w, timeout=0.3, poll_interval=0.05, on_event=events.append
+        )
+        self.assertEqual(got, "")
+        self.assertIn("appeared: ac0.ac", events)
+
+    def test_ignores_files_older_than_the_run(self):
+        stale = self._write("stale.s3p", "old")
+        os.utime(stale, (1e9, 1e9))
+        w = runner_mod.OutputWatcher(self.dir, 3, newer_than=time.time(), stable_polls=1)
+        self.assertEqual(w.poll()[0], "")
+
+    def test_never_returns_the_reference_file_as_the_result(self):
+        """The reference .snp often sits in the working directory.
+
+        Taking it for the result would compare it against itself and report a
+        flawless PASS, which is worse than finding nothing at all.
+        """
+        ref = self._write("a.s6p", "# HZ S RI R 50\n")
+        w = runner_mod.OutputWatcher(
+            self.dir, 6, newer_than=time.time() - 1, stable_polls=1, exclude=[ref]
+        )
+        self.assertEqual(w.poll()[0], "")
+        out = self._write("bbs_sparam.s6p", "# HZ S RI R 50\n1e6 x\n")
+        w.poll()
+        self.assertEqual(os.path.abspath(w.poll()[0]), os.path.abspath(out))
+
+    def test_an_unchanged_pre_existing_file_is_not_a_result(self):
+        self._write("a.s6p", "# HZ S RI R 50\n")
+        w = runner_mod.OutputWatcher(
+            self.dir, 6, newer_than=time.time() - 1, stable_polls=1
+        )
+        self.assertEqual(w.poll()[0], "", "it was already there and has not changed")
+
+    def test_a_pre_existing_file_the_run_overwrites_is_a_result(self):
+        path = self._write("bbs_sparam.s6p", "stale")
+        w = runner_mod.OutputWatcher(
+            self.dir, 6, newer_than=time.time() - 1, stable_polls=1
+        )
+        self.assertEqual(w.poll()[0], "")
+        self._write("bbs_sparam.s6p", "fresh results from this run")
+        w.poll()
+        self.assertEqual(os.path.abspath(w.poll()[0]), os.path.abspath(path))
+
+    def test_exclude_also_covers_the_preferred_name(self):
+        ref = self._write("bbs_sparam.s6p", "data")
+        w = runner_mod.OutputWatcher(
+            self.dir, 6, preferred=ref, newer_than=time.time() - 1, exclude=[ref]
+        )
+        self.assertEqual(w.poll()[0], "")

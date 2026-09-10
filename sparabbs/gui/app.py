@@ -50,6 +50,12 @@ class MainWindow(QtCore.QObject):
         self.command = ""
         self.proc: QtCore.QProcess | None = None
         self._run_started = 0.0
+        self.watcher: runner_mod.OutputWatcher | None = None
+        self._poll_timer: QtCore.QTimer | None = None
+        self._wait_deadline = 0.0
+        self._out_dir = ""
+        self._expected_snp = ""
+        self._nports_running = 0
 
         self._init_widgets()
         self._connect()
@@ -59,6 +65,7 @@ class MainWindow(QtCore.QObject):
     def _init_widgets(self) -> None:
         u = self.ui
         u.editCmd.setText(runner_mod.DEFAULT_COMMAND)
+        u.editLinOptions.setText(deck_mod.DEFAULT_LIN_OPTIONS)
         u.editOutDir.setText(os.path.join(os.getcwd(), "sparabbs_run"))
         for label, value in REF_MODE_LABELS:
             u.comboRefMode.addItem(label, value)
@@ -268,6 +275,8 @@ class MainWindow(QtCore.QObject):
             z0=self._effective_z0(),
             out_dir=os.path.abspath(out_dir),
             max_points=self.ui.spinMaxPoints.value(),
+            lin_options=self.ui.editLinOptions.text().strip()
+            or deck_mod.DEFAULT_LIN_OPTIONS,
         )
         problems = deck_mod.validate(cfg)
         if problems:
@@ -345,37 +354,105 @@ class MainWindow(QtCore.QObject):
             self._log("!! the simulator could not be started - check the command and PATH")
 
     def _on_proc_finished(self, code: int, _status) -> None:
-        elapsed = time.time() - self._run_started
-        self._log(f"-- exit code {code} after {elapsed:.1f}s")
+        self._log(f"-- launcher exited with code {code}")
         self.proc = None
+        self._start_waiting()
+
+    def _start_waiting(self) -> None:
+        """Poll for the Touchstone file.
+
+        The launcher is normally a queue submit command, so its exit tells us
+        the job was accepted, not that it ran.  Keep watching the working
+        directory until the file appears and stops growing.
+        """
+        self.watcher = runner_mod.OutputWatcher(
+            self._out_dir,
+            self._nports_running,
+            self._expected_snp,
+            self._run_started,
+            exclude=[self.ref.path] if self.ref else [],
+        )
+        limit = self.ui.spinWaitMin.value()
+        self._wait_deadline = (
+            self._run_started + limit * 60.0 if limit else 0.0
+        )
+        self._log(
+            f"-- waiting for *.s{self._nports_running}p in {self._out_dir}"
+            + (f" (up to {limit} min)" if limit else " (no time limit)")
+        )
+        self.ui.btnStop.setEnabled(True)
+        self.ui.btnStop.setText("Stop waiting")
+        timer = QtCore.QTimer(self)
+        timer.setInterval(2000)
+        timer.timeout.connect(self._poll_output)
+        self._poll_timer = timer
+        timer.start()
+        self._poll_output()
+
+    def _poll_output(self) -> None:
+        if self.watcher is None:
+            return
+        path, appeared = self.watcher.poll()
+        for name in appeared:
+            self._log(f"   appeared: {name}")
+        waited = time.time() - self._run_started
+        if path:
+            self._finish_waiting()
+            self.ui.editResultSnp.setText(path)
+            self._log(f"-- found {path} after {waited:.0f}s")
+            self._status(f"S-parameters produced: {os.path.basename(path)}")
+            self.ui.tabs.setCurrentWidget(self.ui.tabRef)
+            self._fill_ref_ports()
+            return
+        self._status(f"Waiting for the simulator... {waited:.0f}s elapsed")
+        if self._wait_deadline and time.time() >= self._wait_deadline:
+            self._give_up("the wait timed out")
+
+    def _finish_waiting(self) -> None:
+        if self._poll_timer is not None:
+            self._poll_timer.stop()
+            self._poll_timer = None
+        self.watcher = None
         self.ui.btnRun.setEnabled(True)
         self.ui.btnStop.setEnabled(False)
+        self.ui.btnStop.setText("Stop")
 
-        found = runner_mod.find_output_snp(
-            self._out_dir, self._nports_running, self._expected_snp, self._run_started
-        )
-        if not found:
-            errors = runner_mod.scan_log_for_errors(self.ui.textLog.toPlainText())
-            detail = "\n".join(errors[:8]) or "(no error lines matched in the log)"
-            self._warn(
-                "No S-parameters were produced",
-                f"Nothing matching *.s{self._nports_running}p appeared in\n"
-                f"{self._out_dir}\n\nFrom the log:\n{detail}\n\n"
-                "You can point at the file by hand below if the simulator wrote "
-                "it somewhere else.",
-            )
-            self._status("Run finished, but no .sNp was found.")
-            return
-        self.ui.editResultSnp.setText(found)
-        self._log(f"-- found {found}")
-        self._status(f"S-parameters produced: {os.path.basename(found)}")
-        self.ui.tabs.setCurrentWidget(self.ui.tabRef)
-        self._fill_ref_ports()
+    def _give_up(self, why: str) -> None:
+        produced = self.watcher.produced() if self.watcher else []
+        self._finish_waiting()
+        self._log(f"-- gave up: {why}")
+        errors = runner_mod.scan_log_for_errors(self.ui.textLog.toPlainText())
+        detail = [f"Nothing matching *.s{self._nports_running}p appeared in",
+                  self._out_dir, ""]
+        if produced:
+            detail += ["The run did write:", "  " + ", ".join(produced[:20]), ""]
+            if any(f.endswith((".lin", ".lin0")) for f in produced):
+                detail += [
+                    "A .lin file is present but no Touchstone file, so the "
+                    ".LIN card's format/filename options are not doing what "
+                    "the deck asks. Try a different spelling in the '.LIN "
+                    "options' box - the deck preview shows the line that is "
+                    "written.",
+                    "",
+                ]
+        else:
+            detail += ["The run wrote nothing to that directory at all.", ""]
+        if errors:
+            detail += ["From the log:", *errors[:8], ""]
+        detail += [
+            "If the simulator wrote the file elsewhere, point at it with "
+            "Browse... below."
+        ]
+        self._warn(f"No S-parameters found ({why})", "\n".join(detail))
+        self._status("Run finished, but no .sNp was found.")
 
     def on_stop(self) -> None:
         if self.proc is not None:
-            self._log("-- stopping")
+            self._log("-- stopping the launcher")
             self.proc.kill()
+            return
+        if self.watcher is not None:
+            self._give_up("stopped")
 
     # -- step 3: reference node ------------------------------------------
 

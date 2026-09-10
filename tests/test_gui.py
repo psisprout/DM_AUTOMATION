@@ -179,19 +179,77 @@ class GuiTests(unittest.TestCase):
         self.assertTrue(any("command" in t.lower() for t, _ in self.warnings))
         self.assertIsNone(self.w.proc)
 
-    def test_run_reports_a_missing_output_file(self):
+    def _run_and_settle(self, command="true"):
+        """Run with a launcher that exits at once, then stop its poll timer."""
+        import time as _t
+
         self._load()
-        self.w.ui.editCmd.setText("true")
+        self.w.ui.editCmd.setText(command)
         self.w.on_run()
         deadline = 5.0
         while self.w.proc is not None and deadline > 0:
             self.app.processEvents()
-            deadline -= 0.02
-            import time as _t
-
             _t.sleep(0.02)
-        self.assertIsNone(self.w.proc, "the process never finished")
-        self.assertTrue(any("No S-parameters" in t for t, _ in self.warnings))
+            deadline -= 0.02
+        self.assertIsNone(self.w.proc, "the launcher never finished")
+        if self.w._poll_timer is not None:
+            self.w._poll_timer.stop()  # drive polling by hand from here
+
+    def test_keeps_waiting_after_a_submit_launcher_exits(self):
+        """primesim_sub returns as soon as the job is queued, not when it ran."""
+        self._run_and_settle()
+        self.assertEqual(self.warnings, [], "must not give up the moment the job is submitted")
+        self.assertIsNotNone(self.w.watcher)
+        self.assertTrue(self.w.ui.btnStop.isEnabled())
+        self.assertEqual(self.w.ui.btnStop.text(), "Stop waiting")
+        self.assertIn("waiting for", self.w.ui.textLog.toPlainText())
+
+    def test_picks_up_a_result_that_arrives_later(self):
+        self._run_and_settle()
+        out = os.path.join(self.tmp.name, "bbs_sparam.s3p")
+        with open(out, "w") as fh:
+            fh.write("# HZ S RI R 50\n1e6 " + " ".join(["0.1 0.0"] * 9) + "\n")
+        for _ in range(4):
+            self.w._poll_output()
+        self.assertEqual(self.warnings, [])
+        self.assertEqual(self.w.ui.editResultSnp.text(), out)
+        self.assertIsNone(self.w.watcher, "the watcher stops once the file is in")
+        self.assertFalse(self.w.ui.btnStop.isEnabled())
+
+    def test_stopping_the_wait_lists_what_the_run_did_write(self):
+        self._run_and_settle()
+        for name in ("ac0.ac", "lin0.lin"):
+            with open(os.path.join(self.tmp.name, name), "w") as fh:
+                fh.write("x")
+        self.w._poll_output()
+        self.w.on_stop()
+        self.assertTrue(self.warnings)
+        title, msg = self.warnings[-1]
+        self.assertIn("No S-parameters", title)
+        self.assertIn("ac0.ac", msg)
+        self.assertIn("lin0.lin", msg)
+        self.assertIn(".LIN card", msg, "a .lin with no .sNp needs the syntax hint")
+        self.assertIsNone(self.w.watcher)
+
+    def test_wait_times_out(self):
+        self.w.ui.spinWaitMin.setValue(0)
+        self._run_and_settle()
+        self.w._wait_deadline = 1.0  # already in the past
+        self.w._poll_output()
+        self.assertTrue(any("timed out" in t for t, _ in self.warnings))
+
+    def test_lin_options_are_editable_and_reach_the_deck(self):
+        self._load()
+        self.assertEqual(
+            self.w.ui.editLinOptions.text(),
+            "sparcalc=1 format=touchstone filename={base}",
+        )
+        self.w.ui.editLinOptions.setText("sparcalc=1 format=touchstone2 filename={base}")
+        self.w.on_generate_deck()
+        self.assertIn(
+            ".lin sparcalc=1 format=touchstone2 filename=bbs_sparam",
+            self.w.ui.textDeck.toPlainText(),
+        )
 
     # -- step 3 ----------------------------------------------------------
 

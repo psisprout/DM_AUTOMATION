@@ -48,6 +48,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--cmd", default=runner_mod.DEFAULT_COMMAND, help="run command")
     p.add_argument("--cpu", type=int, default=4)
+    p.add_argument(
+        "--wait",
+        type=int,
+        default=120,
+        help="minutes to wait for the .sNp after the launcher exits "
+        "(0 = wait indefinitely)",
+    )
+    p.add_argument(
+        "--lin-options",
+        default=deck_mod.DEFAULT_LIN_OPTIONS,
+        help="options written onto the .LIN card; {base} is the basename",
+    )
     p.add_argument("--no-run", action="store_true", help="write the deck and stop")
     p.add_argument(
         "--use-snp", default="", help="skip the run and compare this .sNp instead"
@@ -109,7 +121,12 @@ def main(argv: list[str] | None = None) -> int:
             a.port = port_no
 
     cfg = deck_mod.config_from_inputs(
-        ref, subckt, args.bbs, out_dir, assignments=assignments
+        ref,
+        subckt,
+        args.bbs,
+        out_dir,
+        assignments=assignments,
+        lin_options=args.lin_options,
     )
     problems = deck_mod.validate(cfg)
     if problems:
@@ -132,13 +149,27 @@ def main(argv: list[str] | None = None) -> int:
         print(f"running: {command}")
         started = time.time()
         res = runner_mod.run(spec, on_line=lambda line: print(f"  | {line}"))
-        print(f"finished in {res.seconds:.1f}s, exit code {res.returncode}")
-        dut_path = runner_mod.find_output_snp(
-            out_dir, cfg.nports, cfg.expected_snp(), started
+        print(f"launcher exited in {res.seconds:.1f}s with code {res.returncode}")
+        # the launcher is usually a queue submit, so its exit says nothing
+        # about whether the simulation has run yet
+        watcher = runner_mod.OutputWatcher(
+            out_dir, cfg.nports, cfg.expected_snp(), started, exclude=[ref.path]
+        )
+        print(
+            f"waiting for *.s{cfg.nports}p in {out_dir}"
+            + (f" (up to {args.wait} min)" if args.wait else " (no time limit)")
+        )
+        dut_path = runner_mod.wait_for_output(
+            watcher,
+            timeout=args.wait * 60.0,
+            on_event=lambda msg: print(f"  . {msg}"),
         )
         if not dut_path:
             for line in runner_mod.scan_log_for_errors(res.log):
                 print(f"  ! {line}", file=sys.stderr)
+            produced = watcher.produced()
+            if produced:
+                print(f"  the run wrote: {', '.join(produced[:20])}", file=sys.stderr)
             print(
                 f"error: no .s{cfg.nports}p was produced in {out_dir}", file=sys.stderr
             )

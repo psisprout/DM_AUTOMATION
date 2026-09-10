@@ -146,9 +146,23 @@
              <property name="value"><number>0</number></property>
             </widget>
            </item>
-           <item row="1" column="2" colspan="2">
+           <item row="1" column="2">
+            <widget class="QLabel" name="lblWait"><property name="text"><string>Wait for result (min, 0 = forever)</string></property></widget>
+           </item>
+           <item row="1" column="3">
+            <widget class="QSpinBox" name="spinWaitMin">
+             <property name="maximum"><number>10080</number></property>
+             <property name="value"><number>120</number></property>
+            </widget>
+           </item>
+           <item row="2" column="0">
+            <widget class="QLabel" name="lblLin"><property name="text"><string>.LIN options</string></property></widget>
+           </item>
+           <item row="2" column="1" colspan="3"><widget class="QLineEdit" name="editLinOptions"/></item>
+           <item row="3" column="0" colspan="4">
             <widget class="QLabel" name="lblCmdHint">
-             <property name="text"><string>{deck} {deck_abs} {cpu} {dir} are substituted</string></property>
+             <property name="text"><string>Command: {deck} {deck_abs} {cpu} {dir} are substituted.  .LIN options: {base} is the output basename.</string></property>
+             <property name="wordWrap"><bool>true</bool></property>
             </widget>
            </item>
           </layout>

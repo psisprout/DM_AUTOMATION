@@ -66,10 +66,21 @@ and noted in the deck and the report. *Max sweep points* decimates a very long
 grid (endpoints are kept) if the run would otherwise be too slow.
 
 The command template defaults to `primesim_sub -spice -cpu {cpu} -i {deck}`;
-`{deck}`, `{deck_abs}`, `{cpu}` and `{dir}` are substituted. The run streams
-into the log pane and the produced `.sNp` is found automatically — by the
-expected name first, then the newest match in the working directory. If the
-simulator put it elsewhere, point at it by hand.
+`{deck}`, `{deck_abs}`, `{cpu}` and `{dir}` are substituted.
+
+**The launcher exiting does not mean the simulation ran.** A submit command
+queues the job and returns immediately, so after it exits sparabbs keeps
+watching the working directory, logging files as they appear, until a matching
+`.sNp` shows up *and stops growing* — a large Touchstone file arriving over NFS
+is visible long before it is complete. *Wait for result* caps that (0 waits
+indefinitely) and *Stop waiting* ends it early; either way you get a list of
+what the run did write. The reference `.snp` and any other file that was
+already in the directory are never mistaken for the result.
+
+The `.LIN` options are editable because the exact spelling varies between
+simulator versions. If the run produces a `.lin` file but no Touchstone one,
+that card is what to adjust — `{base}` is the output basename, and the deck
+preview shows the line that gets written.
 
 **3 · Reference node.** How the raw N-port is referenced before Z is computed.
 The same transform is applied to *both* networks, so the comparison stays

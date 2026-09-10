@@ -18,7 +18,10 @@ from .touchstone import Network
 
 GROUND = "0"
 
-#: pin roles used by the deck generator and the GUI pin table
+#: options written onto the .LIN card; {base} is substituted
+DEFAULT_LIN_OPTIONS = "sparcalc=1 format=touchstone filename={base}"
+
+#: pin roles used by the deck generator
 ROLE_PORT = "port"
 ROLE_GROUND = "ground"
 ROLE_FLOAT = "float"
@@ -70,6 +73,9 @@ class DeckConfig:
     extra_options: list[str] = field(default_factory=lambda: [".option post=2"])
     max_points: int = 0  # 0 = keep every frequency point
     include_dc_note: bool = True
+    #: options on the .LIN card; {base} is the output basename.  Editable
+    #: because the exact spelling varies between simulator versions.
+    lin_options: str = DEFAULT_LIN_OPTIONS
 
     @property
     def nports(self) -> int:
@@ -298,9 +304,7 @@ def build_deck(cfg: DeckConfig) -> str:
 
     lines += ["", "* ---- analysis ---------------------------------------------------"]
     lines += _ac_poi(freq)
-    lines.append(
-        f".lin sparcalc=1 format=touchstone filename='{cfg.out_base}'"
-    )
+    lines.append(".lin " + cfg.lin_options.format(base=cfg.out_base).strip())
     lines += ["", ".end", ""]
     return "\n".join(lines)
 
