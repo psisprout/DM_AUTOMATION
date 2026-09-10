@@ -86,8 +86,8 @@ class DeckConfig:
 def default_assignments(subckt: Subckt, nports: int) -> list[PinAssignment]:
     """Map pin *k* to port *k* and treat any surplus trailing pins as ground.
 
-    This matches the usual BBS convention (signal pins in Touchstone port order,
-    then a reference pin), and is the starting point the GUI lets you edit.
+    This is the usual BBS convention: signal pins in Touchstone port order,
+    then a reference pin if the model has one.
     """
     out: list[PinAssignment] = []
     for i, pin in enumerate(subckt.pins):
@@ -96,6 +96,57 @@ def default_assignments(subckt: Subckt, nports: int) -> list[PinAssignment]:
         else:
             out.append(PinAssignment(pin=pin, role=ROLE_GROUND))
     return out
+
+
+def _key(name: str) -> str:
+    return sanitize(name).lower()
+
+
+def auto_map(
+    subckt: Subckt, port_names: list[str]
+) -> tuple[list[PinAssignment], list[str]]:
+    """Work out the pin -> port mapping with no help from the user.
+
+    Positional by default.  When the pin names and the Touchstone port names
+    are the same set in a different order, positional mapping would silently
+    transpose the Z matrix, so map by name instead and say so.
+
+    Returns the assignments and a list of notes worth showing the user.
+    """
+    nports = len(port_names)
+    notes: list[str] = []
+    assignments = default_assignments(subckt, nports)
+
+    pins = subckt.pins[:nports]
+    if len(pins) < nports:
+        return assignments, notes
+
+    pin_keys = [_key(p) for p in pins]
+    port_keys = [_key(p) for p in port_names]
+    if pin_keys == port_keys or len(set(pin_keys)) != nports:
+        return assignments, notes
+
+    if sorted(pin_keys) == sorted(port_keys):
+        index = {k: i for i, k in enumerate(pin_keys)}
+        for port, key in enumerate(port_keys, 1):
+            assignments[index[key]].port = port
+        moved = sum(1 for i, k in enumerate(pin_keys) if port_keys[i] != k)
+        notes.append(
+            f"mapped by name, not by position: the subcircuit lists the same "
+            f"{nports} names as the Touchstone file but in a different order "
+            f"({moved} pins differ). Positional mapping would have transposed "
+            f"the Z matrix."
+        )
+        return assignments, notes
+
+    shared = set(pin_keys) & set(port_keys)
+    if len(shared) >= max(2, nports // 2):
+        notes.append(
+            f"{len(shared)} of {nports} Touchstone port names also appear as "
+            "pin names, but the two lists are not the same set, so the mapping "
+            "stays positional - check that pin k really is port k."
+        )
+    return assignments, notes
 
 
 def validate(cfg: DeckConfig) -> list[str]:
@@ -114,13 +165,12 @@ def validate(cfg: DeckConfig) -> list[str]:
         dupes = sorted({p for p in assigned if assigned.count(p) > 1})
         if missing:
             problems.append(
-                f"no pin assigned to port(s) {missing}. The reference has "
-                f"{expected} ports, so the deck has to drive all {expected}. "
-                "Giving a pin the 'ground' role drops it from the deck but not "
-                "from the reference, which is why the port goes missing. To "
-                "leave a port out of the comparison, keep it a port here and "
-                "short it (or leave it open) on the Reference node tab instead "
-                "- that applies to both networks, so they stay comparable."
+                f"no pin drives port(s) {missing}. The reference has {expected} "
+                f"ports but the subcircuit has {len(cfg.subckt.pins)} pins, and "
+                "pin k drives port k, so the deck cannot cover every port. To "
+                "leave a port out of the comparison, short it or leave it open "
+                "on the Reference node tab instead - that applies to both "
+                "networks, so they stay comparable."
             )
         if dupes:
             problems.append(f"port(s) {dupes} assigned to more than one pin")

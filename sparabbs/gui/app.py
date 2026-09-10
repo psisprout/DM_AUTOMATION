@@ -18,7 +18,6 @@ from .qtcompat import QtCore, QtGui, QtWidgets, load_ui
 
 UI_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "main_window.ui")
 
-PIN_COLUMNS = ("Pin", "Role", "Port", "Returns to")
 STATUS_COLOURS = {
     cmp_mod.PASS: QtGui.QColor("#14691f"),
     cmp_mod.WARN: QtGui.QColor("#9a6400"),
@@ -66,15 +65,12 @@ class MainWindow(QtCore.QObject):
         for label, value in ALIGN_LABELS:
             u.comboAlign.addItem(label, value)
 
-        u.tablePins.setColumnCount(len(PIN_COLUMNS))
-        u.tablePins.setHorizontalHeaderLabels(PIN_COLUMNS)
-        u.tablePins.horizontalHeader().setStretchLastSection(True)
-
         u.treeResult.setColumnCount(6)
         u.treeResult.setHeaderLabels(
             ["Term", "max err %", "max dB", "RMSE dB", "phase deg", "Status"]
         )
         mono = QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont)
+        u.textMapping.setFont(mono)
         u.textDeck.setFont(mono)
         u.textLog.setFont(mono)
         u.textXml.setFont(mono)
@@ -91,8 +87,7 @@ class MainWindow(QtCore.QObject):
         u.btnBrowseResult.clicked.connect(lambda: self._browse_file(u.editResultSnp, "Touchstone (*.s*p);;All files (*)"))
         u.btnBrowseOut.clicked.connect(self._browse_dir)
         u.btnLoad.clicked.connect(self.on_load)
-        u.comboSubckt.currentIndexChanged.connect(self._on_subckt_changed)
-        u.btnResetPins.clicked.connect(self._fill_pin_table)
+        u.comboSubckt.currentIndexChanged.connect(self._fill_mapping)
         u.btnGenDeck.clicked.connect(self.on_generate_deck)
         u.btnRun.clicked.connect(self.on_run)
         u.btnStop.clicked.connect(self.on_stop)
@@ -129,7 +124,7 @@ class MainWindow(QtCore.QObject):
 
     def _set_enabled(self, loaded: bool) -> None:
         u = self.ui
-        for w in (u.btnGenDeck, u.btnRun, u.btnResetPins, u.btnCompare):
+        for w in (u.btnGenDeck, u.btnRun, u.btnCompare):
             w.setEnabled(loaded)
         for w in (u.btnSaveXml, u.btnSaveJunit, u.btnPlot):
             w.setEnabled(self.result is not None)
@@ -185,7 +180,7 @@ class MainWindow(QtCore.QObject):
         )
         u.comboSubckt.blockSignals(False)
 
-        self._fill_pin_table()
+        self._fill_mapping()
         self._fill_ref_ports()
         self._set_enabled(loaded=True)
         self._status(f"Loaded {ref.nports}-port reference and {len(info.subckts)} subcircuit(s).")
@@ -196,73 +191,63 @@ class MainWindow(QtCore.QObject):
         name = self.ui.comboSubckt.currentData()
         return self.info.by_name(name) if name else None
 
-    def _on_subckt_changed(self) -> None:
-        self._fill_pin_table()
-
     def _effective_z0(self) -> np.ndarray:
         assert self.ref is not None
         if self.ref.uniform_z0() is None:
             return self.ref.z0.copy()
         return np.full(self.ref.nports, float(self.ui.spinZ0.value()))
 
-    def _fill_pin_table(self) -> None:
+    def assignments(self) -> list[deck_mod.PinAssignment]:
+        """The automatic pin -> port mapping for the selected subcircuit."""
         sub, ref = self._current_subckt(), self.ref
-        table = self.ui.tablePins
-        table.setRowCount(0)
         if sub is None or ref is None:
+            return []
+        return deck_mod.auto_map(sub, ref.port_names)[0]
+
+    def _fill_mapping(self) -> None:
+        sub, ref = self._current_subckt(), self.ref
+        if sub is None or ref is None:
+            self.ui.textMapping.clear()
+            self.ui.lblMappingNotes.setText("-")
             return
-        assignments = deck_mod.default_assignments(sub, ref.nports)
-        table.setRowCount(len(assignments))
-        for row, a in enumerate(assignments):
-            item = QtWidgets.QTableWidgetItem(a.pin)
-            item.setFlags(item.flags() & ~QtCore.Qt.ItemIsEditable)
-            table.setItem(row, 0, item)
 
-            role = QtWidgets.QComboBox()
-            role.addItems(list(deck_mod.ROLES))
-            role.setCurrentText(a.role)
-            role.currentTextChanged.connect(self._sync_pin_row_states)
-            table.setCellWidget(row, 1, role)
+        assignments, notes = deck_mod.auto_map(sub, ref.port_names)
+        ports = sorted(
+            (a for a in assignments if a.role == deck_mod.ROLE_PORT),
+            key=lambda a: a.port,
+        )
+        width = max([len(a.pin) for a in assignments] + [4])
+        lines = [f"{'pin':<{width}}  ->  port"]
+        for a in ports:
+            name = ref.port_names[a.port - 1]
+            same = deck_mod.sanitize(name).lower() == deck_mod.sanitize(a.pin).lower()
+            label = "" if same else f"   ({name})"
+            lines.append(f"{a.pin:<{width}}  ->  {a.port}{label}")
+        for a in assignments:
+            if a.role != deck_mod.ROLE_PORT:
+                lines.append(f"{a.pin:<{width}}  ->  tied to global 0")
+        self.ui.textMapping.setPlainText("\n".join(lines))
 
-            port = QtWidgets.QSpinBox()
-            port.setRange(0, ref.nports)
-            port.setValue(a.port)
-            port.setSpecialValueText("-")
-            table.setCellWidget(row, 2, port)
-
-            minus = QtWidgets.QLineEdit(a.minus)
-            minus.setPlaceholderText("0 (global ground)")
-            table.setCellWidget(row, 3, minus)
-        table.resizeColumnsToContents()
-        self._sync_pin_row_states()
-
-    def _sync_pin_row_states(self) -> None:
-        table = self.ui.tablePins
-        for row in range(table.rowCount()):
-            role = table.cellWidget(row, 1)
-            is_port = role is not None and role.currentText() == deck_mod.ROLE_PORT
-            for col in (2, 3):
-                w = table.cellWidget(row, col)
-                if w is not None:
-                    w.setEnabled(is_port)
-
-    def read_pin_table(self) -> list[deck_mod.PinAssignment]:
-        table = self.ui.tablePins
-        out: list[deck_mod.PinAssignment] = []
-        for row in range(table.rowCount()):
-            pin = table.item(row, 0).text()
-            role = table.cellWidget(row, 1).currentText()
-            port = table.cellWidget(row, 2).value()
-            minus = table.cellWidget(row, 3).text().strip() or deck_mod.GROUND
-            out.append(
-                deck_mod.PinAssignment(
-                    pin=pin,
-                    role=role,
-                    port=port if role == deck_mod.ROLE_PORT else 0,
-                    minus=minus if role == deck_mod.ROLE_PORT else deck_mod.GROUND,
-                )
-            )
-        return out
+        surplus = len(sub.pins) - ref.nports
+        if surplus < 0:
+            notes = [
+                f"the subcircuit has {len(sub.pins)} pins but the reference has "
+                f"{ref.nports} ports - there is no way to drive every port"
+            ] + notes
+        summary = (
+            f"{ref.nports} ports driven"
+            + (f", {surplus} surplus pin(s) tied to global 0" if surplus > 0 else "")
+            + "."
+        )
+        self.ui.lblMappingNotes.setText(
+            summary + ("  " + "  ".join(notes) if notes else "")
+        )
+        pal = self.ui.lblMappingNotes.palette()
+        pal.setColor(
+            QtGui.QPalette.WindowText,
+            STATUS_COLOURS[cmp_mod.WARN if notes else cmp_mod.PASS],
+        )
+        self.ui.lblMappingNotes.setPalette(pal)
 
     # -- step 2: deck and run --------------------------------------------
 
@@ -278,7 +263,7 @@ class MainWindow(QtCore.QObject):
         cfg = deck_mod.DeckConfig(
             bbs_path=self.ui.editBbs.text().strip(),
             subckt=sub,
-            assignments=self.read_pin_table(),
+            assignments=self.assignments(),
             freq=ref.freq,
             z0=self._effective_z0(),
             out_dir=os.path.abspath(out_dir),
@@ -286,7 +271,7 @@ class MainWindow(QtCore.QObject):
         )
         problems = deck_mod.validate(cfg)
         if problems:
-            self._warn("Pin map problem", "\n".join(f"- {p}" for p in problems))
+            self._warn("Cannot build the deck", "\n".join(f"- {p}" for p in problems))
             return None
         return cfg
 

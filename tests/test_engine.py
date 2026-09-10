@@ -449,7 +449,7 @@ class DeckTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = self._cfg(tmp, assignments=a)
             problems = deck_mod.validate(cfg)
-            self.assertTrue(any("no pin assigned to port(s) [2]" in p for p in problems))
+            self.assertTrue(any("no pin drives port(s) [2]" in p for p in problems))
             # the message has to name the remedy, not just the symptom
             self.assertTrue(any("Reference node tab" in p for p in problems))
             with self.assertRaises(deck_mod.DeckError):

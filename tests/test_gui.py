@@ -48,12 +48,39 @@ class GuiTests(unittest.TestCase):
         self.w.on_load()
         self.assertEqual(self.warnings, [])
 
+    def _flat_model(self, n, pin_order=None, name="flat"):
+        """An n-port .snp and a matching n-pin subcircuit, no reference pin."""
+        import numpy as np
+        from sparabbs.touchstone import Network, write_touchstone
+
+        names = [f"VDD{i}" for i in range(1, n + 1)]
+        s = np.zeros((3, n, n), dtype=complex)
+        s[:, range(n), range(n)] = 0.9
+        snp = os.path.join(self.tmp.name, f"{name}.s{n}p")
+        write_touchstone(
+            Network(
+                freq=np.logspace(3, 9, 3),
+                s=s,
+                z0=np.full(n, 50.0),
+                port_names=names,
+            ),
+            snp,
+        )
+        pins = [names[i] for i in pin_order] if pin_order else names
+        bbs = os.path.join(self.tmp.name, f"{name}.sp")
+        with open(bbs, "w") as fh:
+            fh.write(
+                f".subckt {name} {' '.join(pins)}\nR1 {pins[0]} 0 1\n.ends\n"
+            )
+        return snp, bbs
+
     # -- step 1 ----------------------------------------------------------
 
     def test_ui_file_wires_up_every_widget_the_code_touches(self):
         for name in (
             "editSnp", "editBbs", "editOutDir", "btnLoad", "comboSubckt",
-            "tablePins", "spinZ0", "lblZ0Src", "editCmd", "spinCpu",
+            "textMapping", "lblMappingNotes", "spinZ0", "lblZ0Src",
+            "editCmd", "spinCpu",
             "spinMaxPoints", "btnGenDeck", "btnRun", "btnStop", "textDeck",
             "textLog", "editResultSnp", "comboRefMode", "listRefPorts",
             "lblRefDesc", "spinMagErr", "spinErrDb", "spinPhase",
@@ -63,57 +90,69 @@ class GuiTests(unittest.TestCase):
         ):
             self.assertTrue(hasattr(self.w.ui, name), f"missing widget: {name}")
 
-    def test_load_populates_the_summary_and_pin_table(self):
+    def test_load_populates_the_summary_and_mapping(self):
         self._load()
         self.assertIn("3-port", self.w.ui.lblSnpInfo.text())
         self.assertIn("pdn3_bbs", self.w.ui.lblBbsInfo.text())
-        self.assertEqual(self.w.ui.tablePins.rowCount(), 4)
-        self.assertEqual(self.w.ui.tablePins.item(0, 0).text(), "VDD_CORE")
-        roles = [
-            self.w.ui.tablePins.cellWidget(r, 1).currentText() for r in range(4)
-        ]
-        self.assertEqual(roles, ["port", "port", "port", "ground"])
-
-    def test_z0_is_locked_when_the_file_states_it(self):
-        self._load()
-        self.assertFalse(self.w.ui.spinZ0.isEnabled())
-        self.assertEqual(self.w.ui.spinZ0.value(), 50.0)
-        self.assertIn("pdn3.s3p", self.w.ui.lblZ0Src.text())
-
-    def test_z0_is_asked_for_when_the_file_omits_it(self):
-        path = os.path.join(self.tmp.name, "noz0.s1p")
-        with open(path, "w") as fh:
-            fh.write("# HZ S RI\n1e6 0.1 0.0\n2e6 0.2 0.0\n")
-        self.w.ui.editSnp.setText(path)
-        self._load()
-        self.assertTrue(self.w.ui.spinZ0.isEnabled())
-        self.assertIn("states no reference impedance", self.w.ui.lblZ0Src.text())
+        text = self.w.ui.textMapping.toPlainText()
+        self.assertIn("VDD_CORE  ->  1", text)
+        self.assertIn("VDD_PMIC  ->  3", text)
+        self.assertIn("GND", text)
+        self.assertIn("tied to global 0", text)
+        self.assertIn("3 ports driven", self.w.ui.lblMappingNotes.text())
+        self.assertIn("1 surplus pin(s)", self.w.ui.lblMappingNotes.text())
 
     def test_user_supplied_z0_reaches_the_deck(self):
         path = os.path.join(self.tmp.name, "noz0.s1p")
         with open(path, "w") as fh:
             fh.write("# HZ S RI\n1e6 0.1 0.0\n2e6 0.2 0.0\n")
+        bbs = os.path.join(self.tmp.name, "one.sp")
+        with open(bbs, "w") as fh:
+            fh.write(".subckt one A\nR1 A 0 1\n.ends\n")
         self.w.ui.editSnp.setText(path)
+        self.w.ui.editBbs.setText(bbs)
         self._load()
         self.w.ui.spinZ0.setValue(1.0)
-        # the 1-port reference needs a 1-port pin map
-        self.w.ui.tablePins.cellWidget(1, 1).setCurrentText("ground")
-        self.w.ui.tablePins.cellWidget(2, 1).setCurrentText("ground")
         self.w.on_generate_deck()
         self.assertEqual(self.warnings, [])
-        self.assertIn("z0=1", self.w.ui.textDeck.toPlainText())
+        self.assertIn("z0=1 ", self.w.ui.textDeck.toPlainText())
 
-    def test_pin_role_change_disables_the_port_columns(self):
+    def test_mapping_needs_no_interaction_when_pins_match_ports(self):
+        """The 24-port-to-24-pin case: load, then straight to Generate deck."""
+        snp, bbs = self._flat_model(6)
+        self.w.ui.editSnp.setText(snp)
+        self.w.ui.editBbs.setText(bbs)
         self._load()
-        self.w.ui.tablePins.cellWidget(0, 1).setCurrentText("ground")
-        self.assertFalse(self.w.ui.tablePins.cellWidget(0, 2).isEnabled())
-        self.assertFalse(self.w.ui.tablePins.cellWidget(0, 3).isEnabled())
+        self.assertEqual(self.w.ui.lblMappingNotes.text(), "6 ports driven.")
+        cfg = self.w.on_generate_deck()
+        self.assertIsNotNone(cfg)
+        self.assertEqual(self.warnings, [])
+        text = self.w.ui.textDeck.toPlainText()
+        self.assertIn("P1 VDD1 0 port=1 z0=50", text)
+        self.assertIn("P6 VDD6 0 port=6 z0=50", text)
+        self.assertNotIn("Rleak", text)
 
-    def test_reset_restores_the_default_mapping(self):
+    def test_shuffled_pin_order_is_mapped_by_name_and_flagged(self):
+        snp, bbs = self._flat_model(4, pin_order=[2, 0, 3, 1])
+        self.w.ui.editSnp.setText(snp)
+        self.w.ui.editBbs.setText(bbs)
         self._load()
-        self.w.ui.tablePins.cellWidget(0, 1).setCurrentText("float")
-        self.w.ui.btnResetPins.click()
-        self.assertEqual(self.w.ui.tablePins.cellWidget(0, 1).currentText(), "port")
+        self.assertIn("mapped by name", self.w.ui.lblMappingNotes.text())
+        self.w.on_generate_deck()
+        self.assertEqual(self.warnings, [])
+        text = self.w.ui.textDeck.toPlainText()
+        for k in range(1, 5):
+            self.assertIn(f"P{k} VDD{k} 0 port={k} ", text)
+
+    def test_too_few_pins_is_reported(self):
+        snp, _ = self._flat_model(5)
+        _, bbs = self._flat_model(3, name="small")
+        self.w.ui.editSnp.setText(snp)
+        self.w.ui.editBbs.setText(bbs)
+        self._load()
+        self.assertIn("no way to drive every port", self.w.ui.lblMappingNotes.text())
+        self.assertIsNone(self.w.on_generate_deck())
+        self.assertTrue(any("no pin drives port(s)" in m for _, m in self.warnings))
 
     # -- step 2 ----------------------------------------------------------
 
@@ -127,13 +166,6 @@ class GuiTests(unittest.TestCase):
         self.assertIn("P1 VDD_CORE 0 port=1 z0=50", text)
         self.assertIn(".lin sparcalc=1", text)
         self.assertTrue(self.w.ui.editResultSnp.text().endswith(".s3p"))
-
-    def test_bad_pin_map_is_reported_not_crashed(self):
-        self._load()
-        self.w.ui.tablePins.cellWidget(1, 1).setCurrentText("ground")
-        self.assertIsNone(self.w.on_generate_deck())
-        self.assertTrue(self.warnings)
-        self.assertIn("Pin map", self.warnings[0][0])
 
     def test_default_command_is_the_primesim_launcher(self):
         self.assertEqual(

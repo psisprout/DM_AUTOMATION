@@ -96,23 +96,19 @@
         <item>
          <widget class="QGroupBox" name="boxPins">
           <property name="title">
-           <string>Pin map - which subcircuit pin carries which Touchstone port, and what each port returns to</string>
+           <string>Pin to port mapping (worked out automatically)</string>
           </property>
-          <layout class="QVBoxLayout" name="pinsLayout">
-           <item><widget class="QTableWidget" name="tablePins"/></item>
+          <layout class="QVBoxLayout" name="pinsLayout" stretch="0,1">
            <item>
-            <layout class="QHBoxLayout" name="pinButtons">
-             <item>
-              <widget class="QPushButton" name="btnResetPins"><property name="text"><string>Reset to default mapping</string></property></widget>
-             </item>
-             <item>
-              <widget class="QLabel" name="lblPinHint">
-               <property name="text"><string>Default: pin k -&gt; port k, surplus trailing pins tied to global 0.</string></property>
-              </widget>
-             </item>
-             <item><spacer name="pinSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property>
-              <property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
-            </layout>
+            <widget class="QLabel" name="lblMappingNotes">
+             <property name="wordWrap"><bool>true</bool></property>
+             <property name="text"><string>-</string></property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPlainTextEdit" name="textMapping">
+             <property name="readOnly"><bool>true</bool></property>
+            </widget>
            </item>
           </layout>
          </widget>

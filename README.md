@@ -26,17 +26,28 @@ term*. The CLI needs no Qt at all.
 
 ### The four steps
 
-**1 · Inputs.** Point at `a.snp` and `a_sp.sp`, press *Load and parse*.
+**1 · Inputs.** Point at `a.snp` and `a_sp.sp`, press *Load and parse*. There is
+nothing to fill in.
 
 * Port count, frequency grid and port names come from the `.snp`.
 * Z0 comes from the file (`# ... R 50`, or v2 `[Reference]`). If the file
   states none, the Z0 box unlocks and your value is used for both the deck and
   the comparison. Files without an `R` token are common, and Touchstone's
   default of 50 Ω is often wrong for a PDN — many are 1 Ω.
-* The pin map defaults to *pin k → port k*, surplus trailing pins tied to
-  global `0`. Each pin's role is `port`, `ground` or `float` (a floating pin
-  gets a 1 GΩ leak resistor so the node keeps a DC path). A port's *Returns to*
-  net is the negative terminal, `0` unless you name something else.
+* The pin-to-port mapping is worked out for you and shown read-only: pin *k*
+  drives port *k*, and any surplus trailing pins are tied to global `0`. That
+  covers the usual BBS shapes — N pins for N ports, or N + 1 with a reference
+  pin.
+
+The one thing that would otherwise fail silently is a subcircuit whose pin
+order differs from the Touchstone port order, which transposes the Z matrix
+while leaving Z11…Znn looking healthy. So when the pin names and the port names
+are the same set in a different order, the mapping follows the **names** rather
+than the positions and says so above the table. When the names only partly
+overlap it stays positional and warns.
+
+Grounding a port, or picking which node the others are measured against, is not
+done here — that is step 3, where it applies to both networks at once.
 
 **2 · Deck & run.** *Generate deck* writes `bbs2spara.sp`:
 
