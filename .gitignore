@@ -12,3 +12,4 @@ sparabbs_run/
 *.s[0-9][0-9]p
 report.xml
 junit.xml
+.venv38/
