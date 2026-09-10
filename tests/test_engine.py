@@ -407,11 +407,15 @@ class DeckTests(unittest.TestCase):
         self.assertIn("P1 VDD_CORE GND port=1", text)
 
     def test_validate_reports_a_missing_port(self):
+        """Grounding a port pin leaves that reference port undriven."""
         a = deck_mod.default_assignments(self.sub, 3)
         a[1].role = deck_mod.ROLE_GROUND
         with tempfile.TemporaryDirectory() as tmp:
             cfg = self._cfg(tmp, assignments=a)
-            self.assertTrue(any("port" in p for p in deck_mod.validate(cfg)))
+            problems = deck_mod.validate(cfg)
+            self.assertTrue(any("no pin assigned to port(s) [2]" in p for p in problems))
+            # the message has to name the remedy, not just the symptom
+            self.assertTrue(any("Reference node tab" in p for p in problems))
             with self.assertRaises(deck_mod.DeckError):
                 deck_mod.build_deck(cfg)
 

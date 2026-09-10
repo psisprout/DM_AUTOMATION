@@ -113,7 +113,15 @@ def validate(cfg: DeckConfig) -> list[str]:
         missing = sorted(set(range(1, expected + 1)) - set(assigned))
         dupes = sorted({p for p in assigned if assigned.count(p) > 1})
         if missing:
-            problems.append(f"no pin assigned to port(s) {missing}")
+            problems.append(
+                f"no pin assigned to port(s) {missing}. The reference has "
+                f"{expected} ports, so the deck has to drive all {expected}. "
+                "Giving a pin the 'ground' role drops it from the deck but not "
+                "from the reference, which is why the port goes missing. To "
+                "leave a port out of the comparison, keep it a port here and "
+                "short it (or leave it open) on the Reference node tab instead "
+                "- that applies to both networks, so they stay comparable."
+            )
         if dupes:
             problems.append(f"port(s) {dupes} assigned to more than one pin")
         extra = sorted(p for p in set(assigned) if p > expected or p < 1)
