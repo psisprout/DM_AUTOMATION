@@ -174,7 +174,7 @@ def write_xml(tree: ET.ElementTree, path: str, stylesheet: bool = True) -> str:
     head = '<?xml version="1.0" encoding="UTF-8"?>\n'
     if stylesheet:
         head += f'<?xml-stylesheet type="text/xsl" href="{XSLT_HREF}"?>\n'
-    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+    with open(path, "w", encoding="utf-8") as fh:
         fh.write(head + body + "\n")
     _copy_resource(XSLT_HREF, os.path.dirname(os.path.abspath(path)))
     return path
@@ -190,7 +190,7 @@ def _copy_resource(name: str, dest_dir: str) -> None:
     dst = os.path.join(dest_dir, name)
     if os.path.exists(src) and not os.path.exists(dst):
         with open(src, encoding="utf-8") as a, open(
-            dst, "w", encoding="utf-8", newline="\n"
+            dst, "w", encoding="utf-8"
         ) as b:
             b.write(a.read())
 

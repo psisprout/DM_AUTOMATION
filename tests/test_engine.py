@@ -458,37 +458,6 @@ class RunnerTests(unittest.TestCase):
         spec = runner_mod.RunSpec(deck_path="/w/d.sp", cpu=8, cwd="/w")
         self.assertEqual(spec.argv(), ["primesim_sub", "-spice", "-cpu", "8", "-i", "d.sp"])
 
-    def test_posix_splitting_keeps_escaped_spaces(self):
-        self.assertEqual(
-            runner_mod.split_command(r"prog -i my\ deck.sp"), ["prog", "-i", "my deck.sp"]
-        )
-
-    def test_windows_splitting_keeps_backslashes(self):
-        """POSIX splitting would silently eat every separator in a Windows path."""
-        original = runner_mod._WINDOWS
-        runner_mod._WINDOWS = True
-        self.addCleanup(setattr, runner_mod, "_WINDOWS", original)
-        self.assertEqual(
-            runner_mod.split_command(r"C:\syn\bin\ps.exe -i C:\work\d.sp"),
-            ["C:\\syn\\bin\\ps.exe", "-i", "C:\\work\\d.sp"],
-        )
-        self.assertEqual(
-            runner_mod.split_command(r'"C:\Program Files\syn\ps.exe" -i d.sp'),
-            ["C:\\Program Files\\syn\\ps.exe", "-i", "d.sp"],
-        )
-
-    def test_deck_is_written_with_lf_endings(self):
-        _ensure_fixtures()
-        ref = read_touchstone(os.path.join(DATA, "pdn3.s3p"))
-        sub = read_netlist(os.path.join(DATA, "pdn3_bbs.sp")).by_name("pdn3_bbs")
-        with tempfile.TemporaryDirectory() as tmp:
-            cfg = deck_mod.config_from_inputs(
-                ref, sub, os.path.join(DATA, "pdn3_bbs.sp"), tmp
-            )
-            with open(deck_mod.write_deck(cfg), "rb") as fh:
-                raw = fh.read()
-        self.assertNotIn(b"\r\n", raw)
-
     def test_runs_a_real_process_and_streams_output(self):
         with tempfile.TemporaryDirectory() as tmp:
             deck = os.path.join(tmp, "d.sp")

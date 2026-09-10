@@ -367,9 +367,7 @@ def write_touchstone(net: Network, path: str, fmt: str = "RI") -> str:
             prefix = f"{f:.10g} " if row == 0 else " "
             for j in range(0, len(chunk), 4):
                 lines.append((prefix if j == 0 else " ") + " ".join(chunk[j : j + 4]))
-    # LF regardless of platform: a deck or model written on Windows is
-    # routinely read by a simulator on a Linux farm
-    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+    with open(path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
     return path
 
