@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sparabbs import compare as cmp_mod  # noqa: E402
 from sparabbs import deck as deck_mod  # noqa: E402
+from sparabbs import plotting as plot_mod  # noqa: E402
 from sparabbs import report as report_mod  # noqa: E402
 from sparabbs import runner as runner_mod  # noqa: E402
 from sparabbs.netlist import read_netlist  # noqa: E402
@@ -559,27 +560,29 @@ class ReportTests(unittest.TestCase):
         self.dut = read_touchstone(os.path.join(DATA, "pdn3_bbs.s3p"))
         self.res = cmp_mod.compare(self.ref, self.dut)
 
-    def test_xml_structure(self):
-        tree = report_mod.build_xml(
-            self.res, self.ref, self.dut, deck_path="/w/d.sp", command="primesim_sub ..."
-        )
-        root = tree.getroot()
-        self.assertEqual(root.tag, "bbs_validation")
-        self.assertEqual(root.get("status"), self.res.status)
-        self.assertEqual(root.get("nports"), "3")
-        self.assertEqual(len(root.findall("terms/term")), 6)
-        self.assertEqual(root.find("meta/spice").get("deck"), "/w/d.sp")
-        self.assertEqual(
-            [p.get("name") for p in root.findall("meta/ports/port")],
-            ["VDD_CORE", "VDD_IO", "VDD_PMIC"],
-        )
-        z11 = root.findall("terms/term")[0]
-        self.assertEqual(z11.get("name"), "Z11")
-        self.assertEqual(z11.get("kind"), "self")
-        self.assertTrue(z11.findall("band"))
-        self.assertTrue(z11.findall("resonance"))
+    def test_junit_marks_failures(self):
+        import xml.etree.ElementTree as ET
 
-    def test_works_without_ET_indent(self):
+        bad = read_touchstone(os.path.join(DATA, "pdn3_bad.s3p"))
+        res = cmp_mod.compare(self.ref, bad)
+        with tempfile.TemporaryDirectory() as tmp:
+            p = report_mod.write_junit(res, os.path.join(tmp, "junit.xml"))
+            root = ET.parse(p).getroot()
+        self.assertEqual(root.tag, "testsuite")
+        self.assertGreater(len(root.findall(".//failure")), 0)
+        self.assertEqual(int(root.get("failures")), res.counts()["FAIL"])
+
+    def test_junit_names_every_term_and_check(self):
+        import xml.etree.ElementTree as ET
+
+        with tempfile.TemporaryDirectory() as tmp:
+            p = report_mod.write_junit(self.res, os.path.join(tmp, "junit.xml"))
+            root = ET.parse(p).getroot()
+        names = [tc.get("name") for tc in root.findall("testcase")]
+        self.assertIn("Z11", names)
+        self.assertIn("BBS-result passivity", names)
+
+    def test_junit_works_without_ET_indent(self):
         """ET.indent arrived in Python 3.9; site EDA installs are often older."""
         import xml.etree.ElementTree as ET
 
@@ -588,17 +591,12 @@ class ReportTests(unittest.TestCase):
         if had:
             del ET.indent
         try:
-            self.assertFalse(hasattr(ET, "indent"))
-            tree = report_mod.build_xml(self.res, self.ref, self.dut)
-            text = report_mod.to_string(tree)
             with tempfile.TemporaryDirectory() as tmp:
-                out = report_mod.write_xml(tree, os.path.join(tmp, "r.xml"))
-                report_mod.write_junit(self.res, os.path.join(tmp, "j.xml"))
-                ET.parse(out)
+                p = report_mod.write_junit(self.res, os.path.join(tmp, "j.xml"))
+                ET.parse(p)
         finally:
             if had:
                 ET.indent = saved
-        self.assertIn("\n  <meta>", text, "output should still be indented")
 
     def test_indent_is_idempotent(self):
         import xml.etree.ElementTree as ET
@@ -616,43 +614,77 @@ class ReportTests(unittest.TestCase):
         report_mod._indent(root)
         self.assertEqual(ET.tostring(root, encoding="unicode"), "<a />")
 
-    def test_summary_counts_match(self):
-        tree = report_mod.build_xml(self.res, self.ref, self.dut)
-        s = tree.getroot().find("summary")
-        counts = self.res.counts()
-        self.assertEqual(int(s.get("passed")), counts["PASS"])
-        self.assertEqual(int(s.get("failed")), counts["FAIL"])
-        self.assertEqual(int(s.get("terms")), len(self.res.terms))
 
-    def test_written_file_is_valid_xml_with_a_stylesheet(self):
-        import xml.etree.ElementTree as ET
+class SelectionTests(unittest.TestCase):
+    def setUp(self):
+        _ensure_fixtures()
+        self.ref = read_touchstone(os.path.join(DATA, "pdn3.s3p"))
+        self.bad = read_touchstone(os.path.join(DATA, "pdn3_bad.s3p"))
+        self.res = cmp_mod.compare(self.ref, self.bad)
 
-        with tempfile.TemporaryDirectory() as tmp:
-            p = report_mod.write_xml(
-                report_mod.build_xml(self.res, self.ref, self.dut),
-                os.path.join(tmp, "report.xml"),
-            )
-            with open(p) as fh:
-                text = fh.read()
-            ET.parse(p)
-            self.assertIn("report.xsl", text)
-            self.assertTrue(os.path.exists(os.path.join(tmp, "report.xsl")))
+    def test_shapes(self):
+        self.assertEqual(plot_mod.diagonal(3), [(1, 1), (2, 2), (3, 3)])
+        self.assertEqual(len(plot_mod.all_terms(4)), 16)
+        self.assertEqual(len(plot_mod.upper(4)), 10)
+        self.assertEqual(len(plot_mod.off_diagonal(4)), 6)
+        self.assertEqual(plot_mod.row(3, 2), [(2, 1), (2, 2), (2, 3)])
+        self.assertEqual(plot_mod.column(3, 2), [(1, 2), (2, 2), (3, 2)])
+        self.assertEqual(plot_mod.neighbours(4), [(1, 2), (2, 3), (3, 4)])
+        self.assertEqual(plot_mod.neighbours(4, 2), [(1, 3), (2, 4)])
 
-    def test_junit_marks_failures(self):
-        import xml.etree.ElementTree as ET
+    def test_fold_and_dedupe(self):
+        self.assertEqual(plot_mod.fold_to_upper([(2, 1), (1, 2), (3, 3)]), [(1, 2), (3, 3)])
+        self.assertEqual(plot_mod.dedupe([(1, 1), (1, 1), (2, 2)]), [(1, 1), (2, 2)])
 
-        bad = read_touchstone(os.path.join(DATA, "pdn3_bad.s3p"))
-        res = cmp_mod.compare(self.ref, bad)
-        with tempfile.TemporaryDirectory() as tmp:
-            p = report_mod.write_junit(res, os.path.join(tmp, "junit.xml"))
-            root = ET.parse(p).getroot()
-        self.assertEqual(root.tag, "testsuite")
-        self.assertGreater(len(root.findall(".//failure")), 0)
-        self.assertEqual(int(root.get("failures")), res.counts()["FAIL"])
+    def test_by_status_picks_the_terms_that_did_not_match(self):
+        failing = plot_mod.failing(self.res)
+        self.assertTrue(failing)
+        for i, j in failing:
+            self.assertEqual(self.res.term(i, j).status, cmp_mod.FAIL)
 
-    def test_non_finite_metrics_serialise(self):
-        self.assertEqual(report_mod._n(float("inf")), "inf")
-        self.assertEqual(report_mod._n(float("nan")), "nan")
+    def test_worst_is_ordered_and_capped(self):
+        picked = plot_mod.worst(self.res, 3)
+        self.assertEqual(len(picked), 3)
+        errs = [
+            max(b.norm_err_pct for b in self.res.term(i, j).bands) for i, j in picked
+        ]
+        self.assertEqual(errs, sorted(errs, reverse=True))
+
+    def test_worst_handles_asking_for_more_than_exist(self):
+        self.assertEqual(len(plot_mod.worst(self.res, 999)), len(self.res.terms))
+
+    def test_by_name_matches_either_end_by_default(self):
+        picked = plot_mod.by_name(self.res, "VDD_CORE")
+        self.assertIn((1, 2), picked)
+        self.assertIn((2, 1), picked)
+        self.assertNotIn((2, 3), picked)
+
+    def test_by_name_both_requires_both_ends(self):
+        picked = plot_mod.by_name(self.res, "VDD_*", both=True)
+        self.assertIn((1, 2), picked)
+        self.assertEqual(len(picked), 9)
+
+    def test_by_name_accepts_a_glob_and_a_bare_substring(self):
+        self.assertEqual(
+            plot_mod.by_name(self.res, "VDD_IO"), plot_mod.by_name(self.res, "*VDD_IO*")
+        )
+
+    def test_by_name_with_no_match_is_empty(self):
+        self.assertEqual(plot_mod.by_name(self.res, "NOPE"), [])
+        self.assertEqual(plot_mod.by_name(self.res, "   "), [])
+
+    def test_label_names_the_ports(self):
+        self.assertEqual(plot_mod.label(self.res, (1, 1)), "Z11  VDD_CORE")
+        self.assertEqual(plot_mod.label(self.res, (1, 2)), "Z12  VDD_CORE / VDD_IO")
+
+    def test_traces_come_from_the_compared_matrices(self):
+        a, b = plot_mod.traces(self.res, (1, 2))
+        np.testing.assert_allclose(a, self.res.z_ref[:, 0, 1])
+        np.testing.assert_allclose(b, self.res.z_dut[:, 0, 1])
+
+    def test_plot_rejects_an_empty_selection(self):
+        with self.assertRaises(ValueError):
+            plot_mod.plot(self.res, [], show=False)
 
 
 class CliTests(unittest.TestCase):
@@ -675,7 +707,6 @@ class CliTests(unittest.TestCase):
                 ]
             )
             self.assertEqual(rc, 0)
-            self.assertTrue(os.path.exists(os.path.join(tmp, "report.xml")))
             self.assertTrue(os.path.exists(os.path.join(tmp, "junit.xml")))
             self.assertTrue(os.path.exists(os.path.join(tmp, "bbs2spara.sp")))
 

@@ -74,7 +74,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--phase-err-deg", type=float, default=5.0)
     p.add_argument("--peak-shift-pct", type=float, default=2.0)
     p.add_argument("--peak-mag-err-pct", type=float, default=10.0)
-    p.add_argument("--xml", default="", help="report path (default: <out>/report.xml)")
     p.add_argument("--junit", default="", help="also write JUnit XML here")
     return p
 
@@ -191,10 +190,6 @@ def main(argv: list[str] | None = None) -> int:
         ref, dut, criteria=criteria, reference=spec_ref, align_mode=args.align
     )
 
-    xml_path = args.xml or os.path.join(out_dir, "report.xml")
-    tree = report_mod.build_xml(result, ref, dut, deck_path=deck_path, command=command)
-    report_mod.write_xml(tree, xml_path)
-    print(f"report: {xml_path}")
     if args.junit:
         report_mod.write_junit(result, args.junit)
         print(f"junit: {args.junit}")

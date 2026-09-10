@@ -11,6 +11,6 @@ from . import compare as compare_mod  # noqa: F401  (sparabbs.compare stays a mo
 from .compare import Criteria, ReferenceSpec  # noqa: F401
 from .deck import DeckConfig, PinAssignment, build_deck, write_deck  # noqa: F401
 from .netlist import read_netlist  # noqa: F401
-from .report import build_xml, write_junit, write_xml  # noqa: F401
+from .report import write_junit  # noqa: F401
 from .runner import RunSpec, find_output_snp, run  # noqa: F401
 from .touchstone import Network, read_touchstone, write_touchstone  # noqa: F401

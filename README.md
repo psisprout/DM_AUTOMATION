@@ -3,14 +3,14 @@
 ## sparabbs - BBS conversion checker
 
 Validates a broadband-SPICE (BBS) model against the S-parameters it was fitted
-from, in the Z domain, and reports the result as XML.
+from, in the Z domain.
 
 ```
 a.snp  (reference)  ──┐
                       ├─▶ generate PrimeSim deck ─▶ run ─▶ a re-extracted .sNp
 a_sp.sp (BBS model) ──┘                                          │
                                                                  ▼
-                         reference-node choice ─▶ Z comparison ─▶ report.xml
+                    reference-node choice ─▶ Z comparison ─▶ tree + plots
 ```
 
 ### Running it
@@ -98,7 +98,7 @@ Raw mode is the honest *"did the conversion work"* test, port-for-port. The
 other modes answer *"does the difference matter once it is hooked up the way I
 use it"*.
 
-**4 · Compare & report.** Both networks go to Z via
+**4 · Compare.** Both networks go to Z via
 `Z = (I−A)⁻¹(I+A)·diag(z0)` with `Aᵢⱼ = Sᵢⱼ·√(z0ᵢ/z0ⱼ)`, renormalizing the DUT
 first if its Z0 differs. Every Zᵢⱼ is scored per frequency band:
 
@@ -111,33 +111,39 @@ first if its Z0 differs. Every Zᵢⱼ is scored per frequency band:
   peak `|Z|` error, which is the acceptance criterion that actually matters
   for a PDN.
 
-Passivity and reciprocity are checked and reported but, by default, only warn —
-the Z terms decide pass/fail. Tick *Fail on passivity / reciprocity violations*
-to gate on them too.
+A metric above its limit fails; above 60 % of it warns. A band takes its worst
+metric, a term its worst band or peak, and the run its worst term. Passivity
+and reciprocity are checked and reported but, by default, only warn — the Z
+terms decide pass/fail. Tick *Fail on passivity / reciprocity violations* to
+gate on them too.
+
+**5 · Plot.** An N×N grid of checkboxes, one per Zᵢⱼ, tinted green/amber/red by
+verdict so a 24-port matrix is scannable at a glance. Click a row or column
+header to toggle that whole row or column; tick individual cells for anything
+else. The quick buttons *add* to what is already ticked, so *Diagonal* then
+*Off-diagonal* gives you both.
+
+| Button | Picks |
+|---|---|
+| All / None / Invert | the obvious |
+| Diagonal (Zii) | the self impedances |
+| Upper triangle / Off-diagonal | the unique half of a reciprocal matrix |
+| Failing / Failing + warning | exactly what did not match — the reason you ran this |
+| Worst *n* | the *n* largest errors, worst first |
+| Select by name | ports matching a glob like `VDD_PMIC*`; *both ends* narrows it to rail-to-rail |
+
+*Fold Zji onto Zij* stops a reciprocal pair being drawn twice. Reference is
+drawn solid and the BBS result dashed in the same colour, so a term that
+matches reads as a single line. Choose magnitude, magnitude with an error
+panel, error alone, or phase, overlaid in one axes or one subplot per term.
+Plotting needs `matplotlib`; everything else works without it.
 
 ### Output
 
-`report.xml` carries the whole comparison, with `report.xsl` written alongside
-it so a browser renders it as a report. `--junit` / *Save JUnit XML* emits one
-testcase per Z term, which drops straight into a CI job.
-
-```xml
-<bbs_validation status="FAIL" nports="3">
-  <meta>...<reference_node mode="port" description="all ports referenced to VDD_PMIC"/></meta>
-  <criteria mag_err_pct="5" err_db="0.5" .../>
-  <summary status="FAIL" terms="6" passed="3" warned="0" failed="3" points="400"/>
-  <checks><check name="BBS-result passivity" status="PASS" detail="..."/></checks>
-  <terms>
-    <term name="Z11" i="1" j="1" port_i="VDD_CORE" kind="self" status="FAIL">
-      <band name="1MHz-100MHz" status="FAIL" norm_err_pct="6.2" max_err_db="0.55" .../>
-      <resonance status="WARN" ref_f="1.24e8" dut_f="1.31e8" shift_pct="5.6" .../>
-    </term>
-  </terms>
-</bbs_validation>
-```
-
-Browsers block `file://` XSLT by default; serve the directory
-(`python -m http.server`) or open the XML in the GUI's report pane.
+The window is the report: the tree on tab 4 carries every band and resonance
+figure, and tab 5 plots them. For a CI gate, *Save JUnit XML* (or `--junit`)
+writes one testcase per Z term, and the CLI exits non-zero on a failing
+comparison.
 
 ### Batch use
 
@@ -147,7 +153,7 @@ python -m sparabbs.cli \
   --ground-pins GND \
   --cmd 'primesim_sub -spice -cpu {cpu} -i {deck}' --cpu 4 \
   --ref-mode port --ref-ports 3 \
-  --xml report.xml --junit junit.xml
+  --junit junit.xml
 ```
 
 Exit code is 1 when the comparison fails, so it gates a pipeline directly.
@@ -163,7 +169,8 @@ sparabbs/
   deck.py         deck generation and pin-map validation
   runner.py       launching the simulator, finding the .sNp it wrote
   compare.py      reference-node transforms, banding, metrics, verdicts
-  report.py       XML and JUnit output
+  plotting.py     term selection idioms and the plots themselves
+  report.py       JUnit output for CI
   cli.py          headless driver
   gui/
     main_window.ui  Qt Designer layout (XML)

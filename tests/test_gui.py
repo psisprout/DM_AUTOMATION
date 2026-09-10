@@ -85,8 +85,10 @@ class GuiTests(unittest.TestCase):
             "textLog", "editResultSnp", "comboRefMode", "listRefPorts",
             "lblRefDesc", "spinMagErr", "spinErrDb", "spinPhase",
             "spinPeakShift", "spinPeakMag", "comboAlign", "chkGateChecks",
-            "chkFullMatrix", "btnCompare", "treeResult", "textXml",
-            "lblVerdict", "statusbar", "tabs",
+            "chkFullMatrix", "btnCompare", "treeResult", "lblVerdict",
+            "statusbar", "tabs", "tableTerms", "comboPlotMode",
+            "comboPlotLayout", "chkFoldUpper", "btnPlotSelected",
+            "btnPlotFromTree", "lblSelCount", "spinWorst", "editNameFilter",
         ):
             self.assertTrue(hasattr(self.w.ui, name), f"missing widget: {name}")
 
@@ -298,7 +300,7 @@ class GuiTests(unittest.TestCase):
         self.w.ui.editResultSnp.setText(os.path.join(DATA, snp))
         self.w.on_compare()
 
-    def test_compare_fills_the_tree_and_the_xml_pane(self):
+    def test_compare_fills_the_tree(self):
         self._compare_with()
         self.assertEqual(self.warnings, [])
         self.assertIsNotNone(self.w.result)
@@ -307,9 +309,6 @@ class GuiTests(unittest.TestCase):
         self.assertIn("Z11", labels)
         self.assertIn("Z13", labels)
         self.assertIn("BBS-result passivity", labels)
-        xml = self.w.ui.textXml.toPlainText()
-        self.assertTrue(xml.startswith("<bbs_validation"))
-        self.assertIn("VDD_CORE", xml)
         self.assertIn(self.w.result.status, self.w.ui.lblVerdict.text())
 
     def test_tree_terms_carry_their_indices_for_plotting(self):
@@ -341,7 +340,7 @@ class GuiTests(unittest.TestCase):
         self.w.on_compare()
         self.assertEqual(self.warnings, [])
         self.assertEqual(self.w.result.nports, 2)
-        self.assertIn('mode="port"', self.w.ui.textXml.toPlainText())
+        self.assertEqual(self.w.ui.tableTerms.rowCount(), 2)
 
     def test_full_matrix_checkbox_adds_the_lower_triangle(self):
         self._load()
@@ -381,33 +380,139 @@ class GuiTests(unittest.TestCase):
         self.w.on_compare()
         self.assertTrue(any("No BBS result" in t for t, _ in self.warnings))
 
-    def test_save_xml_writes_a_readable_report(self):
+    def test_junit_still_writes(self):
         import xml.etree.ElementTree as ET
-
-        self._compare_with()
-        out = os.path.join(self.tmp.name, "r.xml")
-        self.w.ui.editOutDir.setText(self.tmp.name)
-        # bypass the file dialog, exercise the same write path
         from sparabbs import report as report_mod
 
-        tree = report_mod.build_xml(self.w.result, self.w.ref, self.w.dut)
-        report_mod.write_xml(tree, out)
-        root = ET.parse(out).getroot()
-        self.assertEqual(root.tag, "bbs_validation")
-        self.assertTrue(os.path.exists(os.path.join(self.tmp.name, "report.xsl")))
-
-    def test_plot_without_matplotlib_explains_itself(self):
         self._compare_with()
-        self.w.ui.treeResult.setCurrentItem(self.w.ui.treeResult.topLevelItem(3))
-        try:
-            import matplotlib  # noqa: F401
+        out = os.path.join(self.tmp.name, "junit.xml")
+        report_mod.write_junit(self.w.result, out)
+        self.assertEqual(ET.parse(out).getroot().tag, "testsuite")
 
-            self.skipTest("matplotlib is installed, nothing to report")
-        except ImportError:
-            pass
-        self.w.on_plot()
-        self.assertTrue(any("matplotlib" in t for t, _ in self.warnings))
+    # -- step 5: the plot tab ---------------------------------------------
 
+    def test_matrix_is_n_by_n_and_starts_on_the_diagonal(self):
+        self._compare_with()
+        table = self.w.ui.tableTerms
+        self.assertEqual((table.rowCount(), table.columnCount()), (3, 3))
+        self.assertEqual(self.w.selection(), [(1, 1), (2, 2), (3, 3)])
+        self.assertIn("3 selected", self.w.ui.lblSelCount.text())
+
+    def test_headers_carry_the_port_names(self):
+        self._compare_with()
+        self.assertIn("VDD_CORE", self.w.ui.tableTerms.verticalHeaderItem(0).text())
+
+    def test_quick_buttons(self):
+        self._compare_with()
+        self.w.ui.btnSelNone.click()
+        self.assertEqual(self.w.selection(), [])
+        self.w.ui.btnSelAll.click()
+        self.assertEqual(len(self.w.selection()), 9)
+        self.w.ui.btnSelInvert.click()
+        self.assertEqual(self.w.selection(), [])
+        self.w.ui.btnSelUpper.click()
+        self.assertEqual(len(self.w.selection()), 6)
+        self.w.ui.btnSelNone.click()
+        self.w.ui.btnSelOff.click()
+        self.assertEqual(len(self.w.selection()), 3)
+
+    def test_quick_buttons_add_to_the_current_selection(self):
+        self._compare_with()
+        self.w.ui.btnSelNone.click()
+        self.w.ui.btnSelDiag.click()
+        self.w.ui.btnSelOff.click()
+        self.assertEqual(len(self.w.selection()), 6, "diagonal plus off-diagonal")
+
+    def test_clicking_a_row_header_toggles_that_row(self):
+        self._compare_with()
+        self.w.ui.btnSelNone.click()
+        self.w._toggle_row(1)
+        self.assertEqual(self.w.selection(), [(2, 1), (2, 2), (2, 3)])
+        self.w._toggle_row(1)
+        self.assertEqual(self.w.selection(), [], "clicking again clears it")
+
+    def test_clicking_a_column_header_toggles_that_column(self):
+        self._compare_with()
+        self.w.ui.btnSelNone.click()
+        self.w._toggle_column(2)
+        self.assertEqual(self.w.selection(), [(1, 3), (2, 3), (3, 3)])
+
+    def test_individual_checkboxes_work(self):
+        self._compare_with()
+        self.w.ui.btnSelNone.click()
+        from sparabbs.gui.qtcompat import QtCore
+
+        self.w.ui.tableTerms.item(0, 2).setCheckState(QtCore.Qt.Checked)
+        self.assertEqual(self.w.selection(), [(1, 3)])
+        self.assertIn("1 selected", self.w.ui.lblSelCount.text())
+
+    def test_select_by_status(self):
+        self._load()
+        self.w.ui.spinMagErr.setValue(0.01)
+        self.w.ui.editResultSnp.setText(os.path.join(DATA, "pdn3_bad.s3p"))
+        self.w.on_compare()
+        self.w.ui.btnSelFail.click()
+        picked = self.w.selection()
+        self.assertTrue(picked)
+        for i, j in picked:
+            self.assertEqual(self.w.result.term(min(i, j), max(i, j)).status, "FAIL")
+
+    def test_select_worst_n(self):
+        self._compare_with()
+        self.w.ui.spinWorst.setValue(2)
+        self.w.ui.btnSelWorst.click()
+        self.assertEqual(len(self.w.selection()), 2)
+
+    def test_select_by_port_name(self):
+        self._compare_with()
+        self.w.ui.btnSelNone.click()
+        self.w.ui.editNameFilter.setText("VDD_PMIC")
+        self.w.ui.btnSelName.click()
+        picked = self.w.selection()
+        self.assertTrue(all(3 in t for t in picked), picked)
+
+    def test_unmatched_name_says_so_without_changing_the_selection(self):
+        self._compare_with()
+        before = self.w.selection()
+        self.w.ui.editNameFilter.setText("NO_SUCH_RAIL")
+        self.w.ui.btnSelName.click()
+        self.assertEqual(self.w.selection(), before)
+        self.assertEqual(self.warnings, [])
+
+    def test_fold_shows_the_reduced_count(self):
+        self._compare_with()
+        self.w.ui.btnSelAll.click()
+        self.assertIn("-> 6 after folding", self.w.ui.lblSelCount.text())
+
+    def test_plot_selected_with_nothing_ticked_is_reported(self):
+        self._compare_with()
+        self.w.ui.btnSelNone.click()
+        self.w.on_plot_selected()
+        self.assertTrue(any("Nothing selected" in t for t, _ in self.warnings))
+
+    def test_matrix_tints_cells_by_verdict(self):
+        from sparabbs.gui.app import STATUS_TINTS
+
+        self._load()
+        self.w.ui.spinMagErr.setValue(0.01)
+        self.w.ui.editResultSnp.setText(os.path.join(DATA, "pdn3_bad.s3p"))
+        self.w.on_compare()
+        item = self.w.ui.tableTerms.item(0, 0)
+        self.assertEqual(item.background().color(), STATUS_TINTS["FAIL"])
+        self.assertEqual(item.text(), "", "a letter per cell is unreadable at 24x24")
+        self.assertIn("FAIL", item.toolTip())
+
+    def test_select_by_name_both_ends(self):
+        self._compare_with()
+        self.w.ui.btnSelNone.click()
+        self.w.ui.chkNameBoth.setChecked(True)
+        self.w.ui.editNameFilter.setText("VDD_*")
+        self.w.ui.btnSelName.click()
+        self.assertEqual(len(self.w.selection()), 9, "every port matches at both ends")
+        self.w.ui.btnSelNone.click()
+        self.w.ui.editNameFilter.setText("VDD_PMIC")
+        self.w.ui.btnSelName.click()
+        self.assertEqual(self.w.selection(), [(3, 3)])
 
 if __name__ == "__main__":
     unittest.main()

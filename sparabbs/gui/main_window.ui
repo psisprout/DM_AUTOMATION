@@ -282,28 +282,83 @@
         <item>
          <layout class="QHBoxLayout" name="cmpButtons">
           <item><widget class="QPushButton" name="btnCompare"><property name="text"><string>Compare</string></property></widget></item>
-          <item><widget class="QPushButton" name="btnSaveXml"><property name="text"><string>Save XML...</string></property></widget></item>
           <item><widget class="QPushButton" name="btnSaveJunit"><property name="text"><string>Save JUnit XML...</string></property></widget></item>
-          <item><widget class="QPushButton" name="btnPlot"><property name="text"><string>Plot selected term</string></property></widget></item>
+          <item><widget class="QPushButton" name="btnPlotFromTree"><property name="text"><string>Plot this term</string></property></widget></item>
           <item><widget class="QLabel" name="lblVerdict"><property name="text"><string>-</string></property></widget></item>
           <item><spacer name="cmpSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property>
            <property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
          </layout>
         </item>
         <item>
-         <widget class="QSplitter" name="cmpSplitter">
-          <property name="orientation"><enum>Qt::Horizontal</enum></property>
-          <widget class="QTreeWidget" name="treeResult">
-           <column><property name="text"><string>Term</string></property></column>
-          </widget>
-          <widget class="QPlainTextEdit" name="textXml">
-           <property name="readOnly"><bool>true</bool></property>
-          </widget>
+         <widget class="QTreeWidget" name="treeResult">
+          <column><property name="text"><string>Term</string></property></column>
          </widget>
         </item>
        </layout>
       </widget>
 
+
+      <widget class="QWidget" name="tabPlot">
+       <attribute name="title"><string>5 &#183; Plot</string></attribute>
+       <layout class="QVBoxLayout" name="plotLayout" stretch="0,1,0">
+        <item>
+         <widget class="QGroupBox" name="boxPick">
+          <property name="title"><string>Pick terms</string></property>
+          <layout class="QVBoxLayout" name="pickGrid">
+           <item>
+            <layout class="QHBoxLayout" name="pickRow1">
+             <item><widget class="QPushButton" name="btnSelAll"><property name="text"><string>All</string></property></widget></item>
+             <item><widget class="QPushButton" name="btnSelNone"><property name="text"><string>None</string></property></widget></item>
+             <item><widget class="QPushButton" name="btnSelInvert"><property name="text"><string>Invert</string></property></widget></item>
+             <item><widget class="QPushButton" name="btnSelDiag"><property name="text"><string>Diagonal (Zii)</string></property></widget></item>
+             <item><widget class="QPushButton" name="btnSelUpper"><property name="text"><string>Upper triangle</string></property></widget></item>
+             <item><widget class="QPushButton" name="btnSelOff"><property name="text"><string>Off-diagonal</string></property></widget></item>
+             <item><spacer name="pickSpacer1"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
+            </layout>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="pickRow2">
+             <item><widget class="QPushButton" name="btnSelFail"><property name="text"><string>Failing</string></property></widget></item>
+             <item><widget class="QPushButton" name="btnSelWarn"><property name="text"><string>Failing + warning</string></property></widget></item>
+             <item><widget class="QPushButton" name="btnSelWorst"><property name="text"><string>Worst</string></property></widget></item>
+             <item>
+              <widget class="QSpinBox" name="spinWorst">
+               <property name="minimum"><number>1</number></property>
+               <property name="maximum"><number>999</number></property>
+               <property name="value"><number>8</number></property>
+              </widget>
+             </item>
+             <item><widget class="QLineEdit" name="editNameFilter"><property name="placeholderText"><string>port name, e.g. VDD_PMIC*</string></property></widget></item>
+             <item><widget class="QCheckBox" name="chkNameBoth"><property name="text"><string>both ends</string></property></widget></item>
+             <item><widget class="QPushButton" name="btnSelName"><property name="text"><string>Select by name</string></property></widget></item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="boxMatrix">
+          <property name="title"><string>Click a row or column header to toggle it</string></property>
+          <layout class="QVBoxLayout" name="matrixLayout">
+           <item><widget class="QTableWidget" name="tableTerms"/></item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="plotRow">
+          <item><widget class="QLabel" name="lblMode"><property name="text"><string>Show</string></property></widget></item>
+          <item><widget class="QComboBox" name="comboPlotMode"/></item>
+          <item><widget class="QLabel" name="lblLayout"><property name="text"><string>Layout</string></property></widget></item>
+          <item><widget class="QComboBox" name="comboPlotLayout"/></item>
+          <item><widget class="QCheckBox" name="chkFoldUpper"><property name="text"><string>Fold Zji onto Zij</string></property><property name="checked"><bool>true</bool></property></widget></item>
+          <item><widget class="QPushButton" name="btnPlotSelected"><property name="text"><string>Plot selected</string></property></widget></item>
+          <item><widget class="QLabel" name="lblSelCount"><property name="text"><string>0 selected</string></property></widget></item>
+          <item><spacer name="plotSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property>
+           <property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
      </widget>
     </item>
    </layout>

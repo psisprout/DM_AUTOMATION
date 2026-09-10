@@ -10,6 +10,7 @@ import numpy as np
 
 from .. import compare as cmp_mod
 from .. import deck as deck_mod
+from .. import plotting as plot_mod
 from .. import report as report_mod
 from .. import runner as runner_mod
 from ..netlist import NetlistInfo, read_netlist
@@ -22,6 +23,11 @@ STATUS_COLOURS = {
     cmp_mod.PASS: QtGui.QColor("#14691f"),
     cmp_mod.WARN: QtGui.QColor("#9a6400"),
     cmp_mod.FAIL: QtGui.QColor("#b3261e"),
+}
+STATUS_TINTS = {
+    cmp_mod.PASS: QtGui.QColor("#e8f4ea"),
+    cmp_mod.WARN: QtGui.QColor("#fdf1d8"),
+    cmp_mod.FAIL: QtGui.QColor("#fbe0de"),
 }
 REF_MODE_LABELS = (
     ("Raw ports (model's own reference)", cmp_mod.REF_GLOBAL),
@@ -80,11 +86,23 @@ class MainWindow(QtCore.QObject):
         u.textMapping.setFont(mono)
         u.textDeck.setFont(mono)
         u.textLog.setFont(mono)
-        u.textXml.setFont(mono)
         u.textDeck.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
         u.textLog.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
         u.runSplitter.setSizes([420, 300])
-        u.cmpSplitter.setSizes([680, 460])
+        for value, text in plot_mod.MODES:
+            u.comboPlotMode.addItem(text, value)
+        for value, text in plot_mod.LAYOUTS:
+            u.comboPlotLayout.addItem(text, value)
+        u.tableTerms.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        for header, size in (
+            (u.tableTerms.horizontalHeader(), 26),
+            (u.tableTerms.verticalHeader(), 22),
+        ):
+            header.setSectionsClickable(True)
+            header.setSectionResizeMode(QtWidgets.QHeaderView.Fixed)
+            header.setDefaultSectionSize(size)
+        u.tableTerms.verticalHeader().setDefaultSectionSize(22)
+        u.tableTerms.verticalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Fixed)
         self._set_enabled(loaded=False)
 
     def _connect(self) -> None:
@@ -101,9 +119,22 @@ class MainWindow(QtCore.QObject):
         u.comboRefMode.currentIndexChanged.connect(self._on_ref_mode_changed)
         u.listRefPorts.itemSelectionChanged.connect(self._update_ref_description)
         u.btnCompare.clicked.connect(self.on_compare)
-        u.btnSaveXml.clicked.connect(self.on_save_xml)
         u.btnSaveJunit.clicked.connect(self.on_save_junit)
-        u.btnPlot.clicked.connect(self.on_plot)
+        u.btnPlotFromTree.clicked.connect(self.on_plot_from_tree)
+        u.btnPlotSelected.clicked.connect(self.on_plot_selected)
+        u.tableTerms.itemChanged.connect(self._on_term_toggled)
+        u.tableTerms.horizontalHeader().sectionClicked.connect(self._toggle_column)
+        u.tableTerms.verticalHeader().sectionClicked.connect(self._toggle_row)
+        u.btnSelAll.clicked.connect(lambda: self._select(plot_mod.all_terms(self._n())))
+        u.btnSelNone.clicked.connect(lambda: self._set_selection([]))
+        u.btnSelInvert.clicked.connect(self._invert)
+        u.btnSelDiag.clicked.connect(lambda: self._select(plot_mod.diagonal(self._n())))
+        u.btnSelUpper.clicked.connect(lambda: self._select(plot_mod.upper(self._n())))
+        u.btnSelOff.clicked.connect(lambda: self._select(plot_mod.off_diagonal(self._n())))
+        u.btnSelFail.clicked.connect(lambda: self._select_status([cmp_mod.FAIL]))
+        u.btnSelWarn.clicked.connect(lambda: self._select_status([cmp_mod.FAIL, cmp_mod.WARN]))
+        u.btnSelWorst.clicked.connect(self._select_worst)
+        u.btnSelName.clicked.connect(self._select_by_name)
 
     def show(self) -> None:
         self.ui.show()
@@ -133,7 +164,7 @@ class MainWindow(QtCore.QObject):
         u = self.ui
         for w in (u.btnGenDeck, u.btnRun, u.btnCompare):
             w.setEnabled(loaded)
-        for w in (u.btnSaveXml, u.btnSaveJunit, u.btnPlot):
+        for w in (u.btnSaveJunit, u.btnPlotFromTree, u.btnPlotSelected):
             w.setEnabled(self.result is not None)
 
     # -- step 1: load and parse ------------------------------------------
@@ -615,26 +646,8 @@ class MainWindow(QtCore.QObject):
         for c in range(tree.columnCount()):
             tree.resizeColumnToContents(c)
 
-        tree_xml = report_mod.build_xml(
-            result, ref, dut, deck_path=self.deck_path, command=self.command
-        )
-        self.ui.textXml.setPlainText(report_mod.to_string(tree_xml))
+        self._build_term_matrix()
         self._status(f"Compared {len(result.terms)} Z terms: {result.status}")
-
-    def on_save_xml(self) -> None:
-        if not self._have_result():
-            return
-        start = os.path.join(self.ui.editOutDir.text() or os.getcwd(), "report.xml")
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self.ui, "Save report", start, "XML (*.xml)"
-        )
-        if not path:
-            return
-        tree = report_mod.build_xml(
-            self.result, self.ref, self.dut, deck_path=self.deck_path, command=self.command
-        )
-        report_mod.write_xml(tree, path)
-        self._status(f"Report written to {path} (report.xsl copied alongside it)")
 
     def on_save_junit(self) -> None:
         if not self._have_result():
@@ -649,11 +662,140 @@ class MainWindow(QtCore.QObject):
 
     def _have_result(self) -> bool:
         if self.result is None:
-            self._warn("Nothing to save", "Run a comparison first.")
+            self._warn("Nothing to plot", "Run a comparison first.")
             return False
         return True
 
-    def on_plot(self) -> None:
+    # -- step 5: picking terms to plot ------------------------------------
+
+    def _n(self) -> int:
+        return self.result.nports if self.result else 0
+
+    def _build_term_matrix(self) -> None:
+        """One checkbox per Zij, with the port names on the headers."""
+        table = self.ui.tableTerms
+        table.blockSignals(True)
+        table.clear()
+        n = self._n()
+        table.setRowCount(n)
+        table.setColumnCount(n)
+        if n:
+            names = self.result.port_names
+            table.setHorizontalHeaderLabels([f"{k + 1}" for k in range(n)])
+            table.setVerticalHeaderLabels([f"{k + 1} {names[k]}"[:18] for k in range(n)])
+            for i in range(n):
+                for j in range(n):
+                    item = QtWidgets.QTableWidgetItem()
+                    item.setFlags(QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsEnabled)
+                    item.setCheckState(QtCore.Qt.Unchecked)
+                    item.setToolTip(plot_mod.label(self.result, (i + 1, j + 1)))
+                    if i == j:
+                        item.setBackground(QtGui.QColor("#e4e9f0"))
+                    table.setItem(i, j, item)
+            self._colour_matrix_by_status()
+        table.blockSignals(False)
+        table.resizeColumnsToContents()
+        self._select(plot_mod.diagonal(n))
+
+    def _colour_matrix_by_status(self) -> None:
+        """Tint each cell by its verdict.
+
+        A letter in every cell makes a 24x24 grid unreadable; a wash of colour
+        is scannable at a glance and leaves the checkbox alone.
+        """
+        for t in self.result.terms:
+            for i, j in ((t.i, t.j), (t.j, t.i)):
+                item = self.ui.tableTerms.item(i - 1, j - 1)
+                if item is not None:
+                    item.setBackground(STATUS_TINTS[t.status])
+                    item.setToolTip(
+                        f"{plot_mod.label(self.result, (i, j))}  -  {t.status}"
+                    )
+
+    def selection(self) -> list[tuple[int, int]]:
+        table = self.ui.tableTerms
+        return [
+            (i + 1, j + 1)
+            for i in range(table.rowCount())
+            for j in range(table.columnCount())
+            if table.item(i, j) is not None
+            and table.item(i, j).checkState() == QtCore.Qt.Checked
+        ]
+
+    def _set_selection(self, terms) -> None:
+        wanted = set(terms)
+        table = self.ui.tableTerms
+        table.blockSignals(True)
+        for i in range(table.rowCount()):
+            for j in range(table.columnCount()):
+                item = table.item(i, j)
+                if item is not None:
+                    item.setCheckState(
+                        QtCore.Qt.Checked
+                        if (i + 1, j + 1) in wanted
+                        else QtCore.Qt.Unchecked
+                    )
+        table.blockSignals(False)
+        self._on_term_toggled()
+
+    def _select(self, terms) -> None:
+        """Add to the current selection, which is how the quick buttons compose."""
+        self._set_selection(set(self.selection()) | set(terms))
+
+    def _invert(self) -> None:
+        current = set(self.selection())
+        self._set_selection([t for t in plot_mod.all_terms(self._n()) if t not in current])
+
+    def _toggle_row(self, index: int) -> None:
+        terms = plot_mod.row(self._n(), index + 1)
+        current = set(self.selection())
+        if set(terms) <= current:
+            self._set_selection(current - set(terms))
+        else:
+            self._set_selection(current | set(terms))
+
+    def _toggle_column(self, index: int) -> None:
+        terms = plot_mod.column(self._n(), index + 1)
+        current = set(self.selection())
+        if set(terms) <= current:
+            self._set_selection(current - set(terms))
+        else:
+            self._set_selection(current | set(terms))
+
+    def _select_status(self, statuses) -> None:
+        if not self._have_result():
+            return
+        self._set_selection(plot_mod.by_status(self.result, statuses))
+
+    def _select_worst(self) -> None:
+        if not self._have_result():
+            return
+        self._set_selection(plot_mod.worst(self.result, self.ui.spinWorst.value()))
+
+    def _select_by_name(self) -> None:
+        if not self._have_result():
+            return
+        pattern = self.ui.editNameFilter.text()
+        found = plot_mod.by_name(
+            self.result, pattern, both=self.ui.chkNameBoth.isChecked()
+        )
+        if not found:
+            self._status(f"No port name matches {pattern!r}")
+            return
+        self._select(found)
+
+    def _on_term_toggled(self, *_args) -> None:
+        count = len(self.selection())
+        folded = len(plot_mod.fold_to_upper(self.selection()))
+        text = f"{count} selected"
+        if self.ui.chkFoldUpper.isChecked() and folded != count:
+            text += f" -> {folded} after folding"
+        self.ui.lblSelCount.setText(text)
+
+    # -- plotting ---------------------------------------------------------
+
+    def on_plot_from_tree(self) -> None:
+        """Plot whichever term is highlighted in the results tree."""
         if not self._have_result():
             return
         item = self.ui.treeResult.currentItem()
@@ -662,37 +804,44 @@ class MainWindow(QtCore.QObject):
         if item is None:
             self._warn("No term selected", "Pick a Z term in the tree first.")
             return
-        i, j = item.data(0, QtCore.Qt.UserRole)
-        try:
-            import matplotlib.pyplot as plt
-        except ImportError:
-            self._warn(
-                "matplotlib is not installed",
-                "Plotting needs matplotlib:\n  pip install matplotlib\n\n"
-                "Everything else in sparabbs works without it.",
-            )
+        self._plot([item.data(0, QtCore.Qt.UserRole)])
+
+    def on_plot_selected(self) -> None:
+        if not self._have_result():
             return
-        r = self.result
-        f = r.freq
-        a, b = r.z_ref[:, i - 1, j - 1], r.z_dut[:, i - 1, j - 1]
-        fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(9, 7))
-        ax1.loglog(f, np.abs(a), label="reference")
-        ax1.loglog(f, np.abs(b), "--", label="BBS result")
-        ax1.set_ylabel(f"|Z{i}{j}| (ohm)")
-        ax1.grid(True, which="both", alpha=0.3)
-        ax1.legend()
-        ax1.set_title(
-            f"Z{i}{j}  {r.port_names[i - 1]} / {r.port_names[j - 1]}  -  "
-            f"{r.term(i, j).status}"
-        )
-        with np.errstate(divide="ignore", invalid="ignore"):
-            err = 20 * np.log10(np.abs(b) / np.abs(a))
-        ax2.semilogx(f, err)
-        ax2.set_ylabel("error (dB)")
-        ax2.set_xlabel("frequency (Hz)")
-        ax2.grid(True, which="both", alpha=0.3)
-        fig.tight_layout()
-        plt.show()
+        terms = self.selection()
+        if self.ui.chkFoldUpper.isChecked():
+            terms = plot_mod.fold_to_upper(terms)
+        if not terms:
+            self._warn("Nothing selected", "Tick at least one term in the matrix.")
+            return
+        if len(terms) > plot_mod.BUSY_TRACES:
+            answer = QtWidgets.QMessageBox.question(
+                self.ui,
+                "That is a lot of traces",
+                f"{len(terms)} terms will be drawn, which is slow and hard to "
+                "read.\n\nPlot them anyway?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No,
+            )
+            if answer != QtWidgets.QMessageBox.Yes:
+                return
+        self._plot(terms)
+
+    def _plot(self, terms) -> None:
+        try:
+            plot_mod.plot(
+                self.result,
+                terms,
+                mode=self.ui.comboPlotMode.currentData(),
+                layout=self.ui.comboPlotLayout.currentData(),
+            )
+        except plot_mod.PlotUnavailable as exc:
+            self._warn("Cannot plot", f"{exc}\n\nEverything else works without it.")
+        except Exception as exc:  # pragma: no cover - matplotlib backends vary
+            self._warn("Plot failed", f"{exc}\n\n{traceback.format_exc()}")
+        else:
+            self._status(f"Plotted {len(terms)} term(s)")
 
 
 def install_excepthook() -> None:
