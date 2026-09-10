@@ -20,7 +20,7 @@ python -m sparabbs.gui          # the GUI
 python -m sparabbs.cli --help   # the same engine, headless
 ```
 
-Needs Python 3.9+, numpy, and one Qt binding (PyQt5, PyQt6, PySide2 or
+Needs Python 3.7+, numpy, and one Qt binding (PyQt5, PyQt6, PySide2 or
 PySide6) for the GUI. `matplotlib` is optional and only used by *Plot selected
 term*. The CLI needs no Qt at all.
 
@@ -194,3 +194,6 @@ rather than against the same formula they implement.
 * The netlist scanner reads the file it is given; it does not follow
   `.include` to find a `.subckt` defined elsewhere.
 * Touchstone `H` and `G` parameter files are rejected; `S`, `Z` and `Y` are read.
+* Tested on Python 3.11. The code stays within 3.7 syntax and avoids
+  version-gated APIs, so it should run on an older site install, but only
+  3.11 is exercised by the test suite.

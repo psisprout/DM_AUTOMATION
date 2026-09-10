@@ -553,7 +553,14 @@ class MainWindow(QtCore.QObject):
             return
 
         self.result, self.dut = result, dut
-        self._show_result(result, ref, dut)
+        try:
+            self._show_result(result, ref, dut)
+        except Exception as exc:  # rendering must not lose the comparison
+            self._warn(
+                "Comparison finished, but the report could not be rendered",
+                f"{exc}\n\n{traceback.format_exc()}",
+            )
+            return
         self.ui.tabs.setCurrentWidget(self.ui.tabCompare)
         self._set_enabled(loaded=True)
 
@@ -688,11 +695,38 @@ class MainWindow(QtCore.QObject):
         plt.show()
 
 
+def install_excepthook() -> None:
+    """Show unhandled errors instead of letting Qt abort the process.
+
+    PyQt calls abort() when a slot raises, which takes the whole window down
+    and loses the run with it.  A dialog and a traceback on stderr are far more
+    use than a core dump.
+    """
+    import sys
+
+    previous = sys.excepthook
+
+    def hook(kind, value, tb):
+        text = "".join(traceback.format_exception(kind, value, tb))
+        sys.stderr.write(text)
+        try:
+            QtWidgets.QMessageBox.critical(
+                None,
+                "sparabbs hit an unexpected error",
+                f"{kind.__name__}: {value}\n\n{text}",
+            )
+        except Exception:  # a dialog is best-effort; never recurse
+            previous(kind, value, tb)
+
+    sys.excepthook = hook
+
+
 def main(argv: list[str] | None = None) -> int:
     import sys
 
     argv = list(sys.argv if argv is None else argv)
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(argv)
+    install_excepthook()
     window = MainWindow()
     window.show()
     return app.exec_() if hasattr(app, "exec_") else app.exec()

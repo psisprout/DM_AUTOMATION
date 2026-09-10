@@ -579,6 +579,43 @@ class ReportTests(unittest.TestCase):
         self.assertTrue(z11.findall("band"))
         self.assertTrue(z11.findall("resonance"))
 
+    def test_works_without_ET_indent(self):
+        """ET.indent arrived in Python 3.9; site EDA installs are often older."""
+        import xml.etree.ElementTree as ET
+
+        had = hasattr(ET, "indent")
+        saved = getattr(ET, "indent", None)
+        if had:
+            del ET.indent
+        try:
+            self.assertFalse(hasattr(ET, "indent"))
+            tree = report_mod.build_xml(self.res, self.ref, self.dut)
+            text = report_mod.to_string(tree)
+            with tempfile.TemporaryDirectory() as tmp:
+                out = report_mod.write_xml(tree, os.path.join(tmp, "r.xml"))
+                report_mod.write_junit(self.res, os.path.join(tmp, "j.xml"))
+                ET.parse(out)
+        finally:
+            if had:
+                ET.indent = saved
+        self.assertIn("\n  <meta>", text, "output should still be indented")
+
+    def test_indent_is_idempotent(self):
+        import xml.etree.ElementTree as ET
+
+        root = ET.fromstring("<a><b><c/></b></a>")
+        report_mod._indent(root)
+        once = ET.tostring(root, encoding="unicode")
+        report_mod._indent(root)
+        self.assertEqual(ET.tostring(root, encoding="unicode"), once)
+
+    def test_indent_leaves_an_empty_root_alone(self):
+        import xml.etree.ElementTree as ET
+
+        root = ET.Element("a")
+        report_mod._indent(root)
+        self.assertEqual(ET.tostring(root, encoding="unicode"), "<a />")
+
     def test_summary_counts_match(self):
         tree = report_mod.build_xml(self.res, self.ref, self.dut)
         s = tree.getroot().find("summary")

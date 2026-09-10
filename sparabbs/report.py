@@ -21,6 +21,24 @@ def _n(x: float) -> str:
     return f"{x:.6g}"
 
 
+def _indent(elem: ET.Element, space: str = "  ", level: int = 0) -> None:
+    """Pretty-print in place.
+
+    ``ET.indent`` only exists from Python 3.9, and site EDA installs are often
+    older, so do it here rather than depend on the version.
+    """
+    pad = "\n" + space * level
+    if len(elem):
+        if not (elem.text or "").strip():
+            elem.text = pad + space
+        for child in elem:
+            _indent(child, space, level + 1)
+        if not (child.tail or "").strip():
+            child.tail = pad
+    if level and not (elem.tail or "").strip():
+        elem.tail = pad
+
+
 def build_xml(
     result: CompareResult,
     ref: Network,
@@ -169,7 +187,7 @@ def build_xml(
 
 def write_xml(tree: ET.ElementTree, path: str, stylesheet: bool = True) -> str:
     """Write the report, optionally with an XSLT processing instruction."""
-    ET.indent(tree, space="  ")
+    _indent(tree.getroot())
     body = ET.tostring(tree.getroot(), encoding="unicode")
     head = '<?xml version="1.0" encoding="UTF-8"?>\n'
     if stylesheet:
@@ -181,7 +199,7 @@ def write_xml(tree: ET.ElementTree, path: str, stylesheet: bool = True) -> str:
 
 
 def to_string(tree: ET.ElementTree) -> str:
-    ET.indent(tree, space="  ")
+    _indent(tree.getroot())
     return ET.tostring(tree.getroot(), encoding="unicode")
 
 
@@ -222,6 +240,6 @@ def write_junit(result: CompareResult, path: str, suite: str = "bbs_validation")
         elif t.status == "WARN":
             ET.SubElement(tc, "system-out").text = f"WARN: {detail}"
     tree = ET.ElementTree(ts)
-    ET.indent(tree, space="  ")
+    _indent(tree.getroot())
     tree.write(path, encoding="utf-8", xml_declaration=True)
     return path

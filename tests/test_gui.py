@@ -350,6 +350,31 @@ class GuiTests(unittest.TestCase):
         self.w.on_compare()
         self.assertEqual(len(self.w.result.terms), 9)
 
+    def test_a_render_failure_is_reported_not_fatal(self):
+        """A slot raising takes PyQt down with abort(); it must not reach that."""
+        self._load()
+        self.w.ui.editResultSnp.setText(os.path.join(DATA, "pdn3_bbs.s3p"))
+        original = self.w._show_result
+        self.w._show_result = lambda *a: (_ for _ in ()).throw(RuntimeError("boom"))
+        try:
+            self.w.on_compare()
+        finally:
+            self.w._show_result = original
+        self.assertIsNotNone(self.w.result, "the comparison itself still succeeded")
+        self.assertTrue(any("could not be rendered" in t for t, _ in self.warnings))
+
+    def test_an_excepthook_is_installed(self):
+        import sys
+
+        from sparabbs.gui.app import install_excepthook
+
+        saved = sys.excepthook
+        try:
+            install_excepthook()
+            self.assertIsNot(sys.excepthook, saved)
+        finally:
+            sys.excepthook = saved
+
     def test_compare_without_a_result_file_is_reported(self):
         self._load()
         self.w.ui.editResultSnp.setText("")
