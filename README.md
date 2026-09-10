@@ -77,10 +77,11 @@ indefinitely) and *Stop waiting* ends it early; either way you get a list of
 what the run did write. The reference `.snp` and any other file that was
 already in the directory are never mistaken for the result.
 
-The `.LIN` options are editable because the exact spelling varies between
-simulator versions. If the run produces a `.lin` file but no Touchstone one,
-that card is what to adjust — `{base}` is the output basename, and the deck
-preview shows the line that gets written.
+A PrimeSim run also drops `ac0.ac` and `lin0.lin` next to the Touchstone
+file; those are normal and appear before it. The `.LIN` options stay editable
+in case a simulator version spells them differently — `{base}` is the output
+basename, and the deck preview shows the line that gets written — but the
+default is the spelling confirmed to work, quotes included.
 
 **3 · Reference node.** How the raw N-port is referenced before Z is computed.
 The same transform is applied to *both* networks, so the comparison stays

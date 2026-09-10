@@ -18,8 +18,10 @@ from .touchstone import Network
 
 GROUND = "0"
 
-#: options written onto the .LIN card; {base} is substituted
-DEFAULT_LIN_OPTIONS = "sparcalc=1 format=touchstone filename={base}"
+#: Options written onto the .LIN card; {base} is substituted.  This exact
+#: spelling, quotes included, is the one confirmed to produce a Touchstone
+#: file on PrimeSim - do not "tidy" the quotes away.
+DEFAULT_LIN_OPTIONS = "sparcalc=1 format=touchstone filename='{base}'"
 
 #: pin roles used by the deck generator
 ROLE_PORT = "port"

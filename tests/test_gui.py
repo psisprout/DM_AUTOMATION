@@ -242,9 +242,11 @@ class GuiTests(unittest.TestCase):
         self._load()
         self.assertEqual(
             self.w.ui.editLinOptions.text(),
-            "sparcalc=1 format=touchstone filename={base}",
+            "sparcalc=1 format=touchstone filename='{base}'",
         )
-        self.w.ui.editLinOptions.setText("sparcalc=1 format=touchstone2 filename={base}")
+        self.w.ui.editLinOptions.setText(
+            "sparcalc=1 format=touchstone2 filename={base}"
+        )
         self.w.on_generate_deck()
         self.assertIn(
             ".lin sparcalc=1 format=touchstone2 filename=bbs_sparam",
