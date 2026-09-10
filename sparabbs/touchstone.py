@@ -99,7 +99,7 @@ def _solve_nports(ntokens: int, hint: int | None) -> int:
 
 def read_touchstone(path: str) -> Network:
     """Parse a Touchstone v1.0 or v2.0 file into a :class:`Network`."""
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+    with open(path, "r", errors="replace") as fh:
         raw_lines = fh.readlines()
 
     comments: list[str] = []
@@ -367,7 +367,7 @@ def write_touchstone(net: Network, path: str, fmt: str = "RI") -> str:
             prefix = f"{f:.10g} " if row == 0 else " "
             for j in range(0, len(chunk), 4):
                 lines.append((prefix if j == 0 else " ") + " ".join(chunk[j : j + 4]))
-    with open(path, "w", encoding="utf-8") as fh:
+    with open(path, "w") as fh:
         fh.write("\n".join(lines) + "\n")
     return path
 

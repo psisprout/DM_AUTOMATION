@@ -189,9 +189,7 @@ def _copy_resource(name: str, dest_dir: str) -> None:
     src = os.path.join(os.path.dirname(__file__), "resources", name)
     dst = os.path.join(dest_dir, name)
     if os.path.exists(src) and not os.path.exists(dst):
-        with open(src, encoding="utf-8") as a, open(
-            dst, "w", encoding="utf-8"
-        ) as b:
+        with open(src) as a, open(dst, "w") as b:
             b.write(a.read())
 
 

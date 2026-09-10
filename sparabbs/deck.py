@@ -237,7 +237,7 @@ def write_deck(cfg: DeckConfig) -> str:
     """Write the deck to :attr:`DeckConfig.deck_path` and return that path."""
     os.makedirs(cfg.out_dir, exist_ok=True)
     text = build_deck(cfg)
-    with open(cfg.deck_path, "w", encoding="utf-8") as fh:
+    with open(cfg.deck_path, "w") as fh:
         fh.write(text)
     return cfg.deck_path
 

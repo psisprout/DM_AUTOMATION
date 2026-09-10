@@ -16,29 +16,13 @@ a_sp.sp (BBS model) ──┘                                          │
 ### Running it
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-
 python -m sparabbs.gui          # the GUI
 python -m sparabbs.cli --help   # the same engine, headless
 ```
 
 Needs Python 3.9+, numpy, and one Qt binding (PyQt5, PyQt6, PySide2 or
-PySide6) for the GUI; `pip install -r requirements.txt` covers it. `matplotlib`
-is optional and only used by *Plot selected term*. The CLI needs no Qt at all.
-
-### VS Code
-
-Open the folder, **Ctrl+Shift+P → Python: Select Interpreter**, then
-**F5 → sparabbs GUI**. `.vscode/launch.json` also has CLI configurations, and
-`.vscode/tasks.json` has *launch GUI* / *run all tests* under
-**Ctrl+Shift+P → Run Task**. If you work over Remote-SSH, all of it runs on the
-remote host, which is where the simulator lives anyway.
-
-A run needs an X display: local desktop, `ssh -X`, or VNC. Over plain
-Remote-SSH with no X forwarding the GUI cannot open, so use `sparabbs.cli`
-there, or run the GUI on a machine that has a display and point it at the
-shared filesystem.
+PySide6) for the GUI. `matplotlib` is optional and only used by *Plot selected
+term*. The CLI needs no Qt at all.
 
 ### The four steps
 

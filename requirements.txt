@@ -1,3 +1,0 @@
-numpy>=1.20
-PyQt5>=5.15      # GUI only; PyQt6 / PySide2 / PySide6 also work
-matplotlib>=3.5  # optional, only for "Plot selected term"
