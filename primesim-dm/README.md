@@ -343,6 +343,7 @@ Chrome / Edge / Firefox 에서 됩니다. 파일 하나라 그냥 더블클릭�
 | 회색 박스 | 소자. 이름 + subckt(또는 소자 종류) |
 | 박스 밑 `⏚ vddq, vss` | 그 소자가 물린 전원/접지 |
 | 흰 알약 | net. 굵은 선이면 버스 |
+| **노란 알약 + `·R` / `·C`** | 인스턴스 하나만 붙은 net. **문제가 아니라** R/C 로 종단된 것 |
 | **빨간 점선 + 빨간 알약** | 한쪽만 붙은 net — `terminate` 가 집어갈 후보 |
 
 그림이 hairball이 되지 않게 두 가지를 합니다. **둘 다 그림 자체보다 중요합니다.**
@@ -372,6 +373,50 @@ hbm_tx_rx.sp
 21 element(s), 19 net node(s)
 1 one-sided net node(s), drawn in red
 ```
+
+### R / C 는 인스턴스가 아닙니다
+
+`C_RCV_BALL_EP` 같은 종단 커패시터는 설계 블록이 아니라 **그 노드의 성질**입니다.
+박스로 그리면 인스턴스 수가 두 배가 되고 정작 서로 신호를 주고받는 것들이 밀려납니다.
+그래서 **한쪽만 신호에 물린 2단자 수동소자(R/C/L)는 그 노드에 접어 넣습니다.**
+
+```
+26 element(s), 40 net node(s)
+24 passive(s) folded into their node, not drawn as instances
+```
+
+- 접힌 소자는 net 알약에 `·R` / `·C` 로 표시되고 **노란색**이 됩니다.
+- **두 신호 사이를 잇는 R/C 는 박스로 남습니다.** 그건 연결 경로라서, 접으면 그림이
+  보여주려던 길이 끊깁니다.
+- **한쪽만 연결됐는지 판정은 안 바뀝니다.** `lint` 는 net 에 붙은 소자를 다 세므로
+  `ball_dq0` (XPKG + C) 은 2개짜리 — 빨강이 아닙니다. 그림도 같은 수를 씁니다.
+
+### "이건 왜 빨간색이 아니지?" — 노드를 선택하면
+
+노드 하나만 선택하면 왼쪽 아래에 작은 창이 뜹니다.
+
+```
+[ball_dq0  net]
+  instances  XPKG_DQ0
+  passives   C_RCV_BALL_EP0 180f
+  elements   2
+  → not red because 1 passive(s) (C) sit on it as well as the instance,
+    so the deck has 2 elements on this net.
+```
+
+인스턴스를 고르면 위치·전원·물린 net 목록이 나옵니다. **선택이 바뀔 때 한 번만**
+만들기 때문에 노드가 수백 개여도 느려지지 않습니다.
+
+### 잔가지 접기 — `leaf nets` / `stubs`
+
+| 버튼 | 하는 일 |
+|---|---|
+| `leaf nets` | **선택한 인스턴스에만** 매달린 net 을 껐다 켰다. 비트별 IO 면 8개 골라서 한 번에 |
+| `stubs` | 숨긴 인스턴스 때문에 **딸려 나간 net** 을 도로 보이게 (점선). 다시 누르면 숨김 |
+
+**`leaf nets` 는 빨간 net 을 절대 건드리지 않습니다.** 종단된 잔가지는 접어도 되지만
+한쪽만 연결된 net 은 찾던 문제라서요. 접힌 것들은 `hidden…` 패널의 `nets` 에 모이니
+거기서 골라 되살리면 됩니다.
 
 ### 안 볼 인스턴스 빼기
 

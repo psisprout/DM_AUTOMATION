@@ -35,6 +35,14 @@ _BUS = re.compile(r"^(.*?)[<\[(]?(\d+)[>\])]?$")
 
 SEV_FLOATING = "floating"
 
+# A termination resistor is not a block of the design, it is a property of
+# the node it sits on.  Drawn as boxes they double the instance count and
+# push apart the things that actually talk to each other, so a two-terminal
+# passive with only one signal end is folded into that node instead.  One
+# that bridges two signal nets is left alone: it carries the connection, and
+# absorbing it would break the path the picture exists to show.
+PASSIVE_KINDS = ("R", "C", "L")
+
 
 def _stem(net):
     """('dq<7>') -> ('dq', 7); a net with no index -> (net, None)."""
@@ -94,8 +102,9 @@ class NetNode(object):
     orphan = False            # nothing left that it touches is drawn
 
     def __init__(self, label, nets, boxes, width, degree=None,
-                 hidden_ends=0):
+                 hidden_ends=0, loads=()):
         self.label = label
+        self.loads = list(loads)  # R/C/L folded into this node
         self.nets = nets          # the real net names behind this node
         self.boxes = boxes        # the Box objects it touches AND that are drawn
         self.width = width        # how many nets collapsed into it
@@ -122,6 +131,21 @@ class NetNode(object):
         """Connected, but to something not drawn."""
         return self.hidden_ends > 0
 
+    @property
+    def leaf(self):
+        """One instance on it, and whatever passives - not a finding.
+
+        This is the node that looks like it should be red and is not: it is
+        terminated, or loaded, and the thing on the other end is an R or a C
+        rather than a block.  What exactly is there is in ``loads``.
+        """
+        return len(self.boxes) < 2 and not self.floating
+
+    @property
+    def load_mark(self):
+        kinds = sorted(set(l["kind"] for l in self.loads))
+        return "".join(kinds)
+
 
 class Graph(object):
     def __init__(self):
@@ -140,6 +164,7 @@ class Graph(object):
         # not carry what was taken out of it.
         self.gone_boxes = []
         self.gone_nets = []
+        self.absorbed = 0         # passives folded into their node
         self.columns = []         # names of the element columns, left to right
         self.unplaced = 0         # boxes no layout file spoke for
         self.geom = {"x": {}, "width": {}}   # per-column x and width
@@ -158,6 +183,17 @@ def _box_filter(patterns):
         hay = "%s %s" % (box.name, box.subckt or box.kind)
         return any(r.search(hay) for r in rx)
     return match
+
+
+def _load_of(el):
+    """The bit of an R/C/L worth showing: its name, kind and value."""
+    value = ""
+    for tok in el.tail:
+        if "=" not in tok:
+            value = tok
+            break
+    return {"name": el.name, "kind": el.kind, "value": value,
+            "where": el.where()}
 
 
 def _net_filter(patterns):
@@ -189,6 +225,11 @@ def build(deck, rails=DEFAULT_RAILS, group_buses=True, max_elements=80,
 
     by_el, boxes = {}, []
     for el in deck.elements:
+        if el.kind in PASSIVE_KINDS:
+            signal = [n for n in el.nodes if not is_rail(n)]
+            if len(set(signal)) <= 1:
+                g.absorbed += 1
+                continue              # folded into its node further down
         box = Box(el)
         by_el[id(el)] = box
         boxes.append(box)
@@ -206,21 +247,30 @@ def build(deck, rails=DEFAULT_RAILS, group_buses=True, max_elements=80,
 
     # net -> every box that touches it, hidden ones included: the picture is
     # allowed to leave things out, the connectivity behind it is not
-    touch = {}
+    touch, loads_of, degree_of = {}, {}, {}
     for net, users in deck.net_users.items():
-        on = []
+        on, loads, seen = [], [], set()
         for el, _idx in users:
+            if id(el) in seen:
+                continue
+            seen.add(id(el))
             box = by_el.get(id(el))
-            if box is not None and box not in on:
+            if box is not None:
                 on.append(box)
-        if not on:
-            continue
+            else:
+                loads.append(_load_of(el))
         if is_rail(net):
             for box in on:
                 if net not in box.rails:
                     box.rails.append(net)
             continue
+        if not on and not loads:
+            continue
         touch[net] = on
+        loads_of[net] = loads
+        # counted over every element on the net, passives included, so that
+        # "one-sided" still means what the checker means by it
+        degree_of[net] = len(seen)
 
     live = [b for b in boxes if not b.hidden]
     if max_elements and len(live) > max_elements:
@@ -241,14 +291,15 @@ def build(deck, rails=DEFAULT_RAILS, group_buses=True, max_elements=80,
     groups = {}
     for net, on in touch.items():
         stem, idx = _stem(net) if group_buses else (net, None)
-        key = (stem, idx is None, tuple(sorted(id(b) for b in on)))
+        key = (stem, idx is None, tuple(sorted(id(b) for b in on)),
+               tuple(sorted(l["kind"] for l in loads_of[net])))
         groups.setdefault(key, []).append((net, idx, on))
 
     drop_net = _net_filter(hide_nets) if hide_nets else None
     net_names = set(hide_net_names or ())
 
     nodes = []
-    for (stem, plain, _sig), members in groups.items():
+    for (stem, plain, _sig, _loads), members in groups.items():
         nets = [m[0] for m in members]
         on = members[0][2]
         if plain or len(members) == 1:
@@ -256,8 +307,12 @@ def build(deck, rails=DEFAULT_RAILS, group_buses=True, max_elements=80,
         else:
             label = "%s[%s]" % (stem, _ranges(m[1] for m in members))
         shown = [b for b in on if not b.hidden]
+        loads = []
+        for member in members:
+            loads.extend(loads_of[member[0]])
         node = NetNode(label, sorted(nets), shown, len(nets),
-                       degree=len(on), hidden_ends=len(on) - len(shown))
+                       degree=degree_of[members[0][0]],
+                       hidden_ends=len(on) - len(shown), loads=loads)
         node.all_boxes = on
         nodes.append(node)
 
@@ -273,13 +328,15 @@ def build(deck, rails=DEFAULT_RAILS, group_buses=True, max_elements=80,
                 g.hidden_nets_floating += 1
             continue
 
-        # A net earns its place by showing a connection.  Hide the source
-        # that drove a_dq0 and what is left is a stub hanging off the one
-        # instance still on screen - it says nothing and crowds out what
-        # does, so it goes too.  The exception is a net that was already
-        # one-sided in the deck: that is not a stub, that is the finding.
-        need = 1 if node.degree < 2 else 2
-        if len(node.boxes) < need:
+        # A net that LOST something to hiding and is left without two drawn
+        # ends is a stub: hide the source that drove a_dq0 and what remains
+        # hangs off one box saying nothing.  A net that never lost anything
+        # is left alone however few boxes it has - one instance and a
+        # termination is a real node, not a stub - and a net that was
+        # already one-sided in the deck is the finding, not clutter.
+        lost_a_box = len(node.boxes) < len(node.all_boxes)
+        if (not node.boxes) or (lost_a_box and len(node.boxes) < 2
+                                and node.degree >= 2):
             node.orphan = True
             g.lost += 1
             if node.degree < 2:
@@ -610,6 +667,8 @@ STYLE = """
   .netl { fill: #24303f; font: 11.5px ui-monospace, Menlo, Consolas, monospace; }
   .wire { stroke: #7f8fa4; stroke-width: 1.3; fill: none; }
   .bus  { stroke: #46617f; stroke-width: 2.6; fill: none; }
+  .leaf      { fill: #fbf7ec; stroke: #b08d3f; stroke-width: 1.3; }
+  .leafl     { fill: #6d5720; font: 11.5px ui-monospace, Menlo, Consolas, monospace; }
   .cross     { fill: #f4f6f8; stroke: #8a93a0; stroke-width: 1.3;
                stroke-dasharray: 5 3; }
   .crossl    { fill: #5c6b80; font: 11.5px ui-monospace, Menlo, Consolas, monospace; }
@@ -635,6 +694,8 @@ STYLE = """
   .netl { fill: #dae2ec; }
   .wire { stroke: #6c7d92; }
   .bus  { stroke: #8fb4d9; }
+  .leaf      { fill: #241f13; stroke: #c3ad78; }
+  .leafl     { fill: #d8c08a; }
   .cross     { fill: #1a1f27; stroke: #7d8795; }
   .crossl    { fill: #93a3b8; }
   .crosswire { stroke: #79838f; }
@@ -739,6 +800,12 @@ def render_svg(g, title="deck connectivity", header=(), embed_header=True,
         elif net.crosses:
             cls, lcls = "cross", "crossl"
             label += "  \u2192"          # it carries on somewhere not drawn
+        elif net.leaf:
+            # one instance and a termination: not a finding, and the mark
+            # says why without having to ask
+            cls, lcls = "leaf", "leafl"
+            if net.load_mark:
+                label += "  \u00b7" + net.load_mark
         else:
             cls, lcls = "net", "netl"
         out.append('<g class="node net-node%s" id="%s" data-label="%s" '
@@ -758,6 +825,9 @@ def render_svg(g, title="deck connectivity", header=(), embed_header=True,
         elif net.crosses:
             note = (" (also reaches %d instance(s) not drawn)"
                     % net.hidden_ends)
+        if net.loads:
+            note += " [%s]" % ", ".join(
+                "%s %s" % (l["name"], l["value"]) for l in net.loads[:6])
         out.append("<title>%s</title>" % _esc(", ".join(net.nets) + note))
         out.append("</g>")
 
@@ -800,6 +870,7 @@ def viewer_state(g):
     for i, box in enumerate(g.boxes + g.gone_boxes):
         boxes.append({"id": "b%d" % i, "name": box.name,
                       "sub": box.sub_label, "hidden": bool(box.hidden),
+                      "where": box.el.where(), "rails": list(box.rails),
                       "col": int(box.layer // 2), "row": float(box.order),
                       "x": round(box.x, 2), "y": round(box.y, 2),
                       "w": round(box.w, 2), "h": round(box.h, 2)})
@@ -808,6 +879,10 @@ def viewer_state(g):
     for j, net in enumerate(g.nets + g.gone_nets):
         nets.append({"id": "n%d" % j, "label": net.label,
                      "hidden": bool(net.hidden), "degree": net.degree,
+                     "red": bool(net.floating), "nets": net.nets[:24],
+                     "loads": [{"name": l["name"], "kind": l["kind"],
+                                "value": l["value"], "where": l["where"]}
+                               for l in net.loads[:24]],
                      "boxes": [bid[id(b)] for b in
                                getattr(net, "all_boxes", net.boxes)
                                if id(b) in bid],
@@ -943,6 +1018,25 @@ body.editing #scene .node.lift { cursor: grabbing; opacity: 0.85; }
 #panelbody .row.auto { cursor: default; opacity: 0.75; }
 #panelbody .row.auto:hover { background: none; }
 #panelbody .none { padding: 3px 10px; color: #8794a6; }
+/* The inspector floats over the canvas: it answers "why is this node not
+   red" for one selected node, so it is built once per selection rather
+   than per node, and it can never reflow the page under the pointer. */
+#inspect {
+  position: absolute; left: 8px; bottom: 8px; width: 300px; max-height: 46%;
+  display: none; flex-direction: column; background: #ffffff;
+  border: 1px solid #b6c0cd; border-radius: 6px; overflow: hidden;
+  box-shadow: 0 4px 16px rgba(20,30,45,0.14);
+}
+#inspect.on { display: flex; }
+#inspecthead {
+  padding: 6px 9px; border-bottom: 1px solid #e2e7ee; font-weight: 600;
+}
+#inspecthead .sub { font-weight: 400; color: #5c6b80; }
+#inspectbody { overflow-y: auto; padding: 5px 0 7px; }
+#inspectbody .line { display: flex; gap: 8px; padding: 2px 9px; }
+#inspectbody .line .k { color: #8794a6; min-width: 74px; }
+#inspectbody .line .v { flex: 1; word-break: break-all; }
+#inspectbody .why { padding: 4px 9px; color: #6d5720; background: #fbf7ec; }
 #scene .node.crossed rect { stroke: #8a93a0; stroke-dasharray: 5 3; }
 @media (prefers-color-scheme: dark) {
   #edit.on { background: #24405e; border-color: #5b86bd; }
@@ -961,6 +1055,11 @@ body.editing #scene .node.lift { cursor: grabbing; opacity: 0.85; }
   #panelbody h4 { color: #93a3b8; }
   #panelbody .row:hover { background: #212b37; }
   #panelbody .row .why, #panelbody .none { color: #7f8fa4; }
+  #inspect { background: #171d25; border-color: #3d4957;
+             box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
+  #inspecthead { border-bottom-color: #2b3541; }
+  #inspecthead .sub, #inspectbody .line .k { color: #93a3b8; }
+  #inspectbody .why { color: #d8c08a; background: #241f13; }
 }
 @media (prefers-color-scheme: dark) {
   body { background: #12161c; color: #e8edf4; }
@@ -1403,7 +1502,7 @@ EDITOR_JS = r"""
   // drove it hidden, a_dq0 is a stub off the one box still drawn, and the
   // stub goes too.  A net that was already one-sided is not a stub - that
   // is the finding, and it stays.
-  var hid = {}, hidNet = {};
+  var hid = {}, hidNet = {}, showStubs = false;
   var hideinfo = document.getElementById('hideinfo');
   var panel = document.getElementById('panel');
   var panelBody = document.getElementById('panelbody');
@@ -1414,9 +1513,24 @@ EDITOR_JS = r"""
   function netState(n) {
     if (hidNet[n.id]) return 'hidden';
     var shown = n.boxes.filter(function (id) { return !hid[id]; });
-    var need = n.degree < 2 ? 1 : 2;
-    if (shown.length < need) return 'orphan';
-    return shown.length < n.boxes.length ? 'crossed' : 'on';
+    if (!shown.length) return 'orphan';          // nothing to hang it off
+    var lostBox = shown.length < n.boxes.length;
+    if (lostBox && shown.length < 2 && n.degree >= 2 && !showStubs) {
+      return 'orphan';                           // a stub, see the toggle
+    }
+    return lostBox ? 'crossed' : 'on';
+  }
+
+  // the nets that hang off exactly one instance and are not findings: a
+  // terminated pin says the same thing eight times over on a per-bit IO
+  function leafNetsOf(boxIds) {
+    var want = {};
+    boxIds.forEach(function (id) { want[id] = true; });
+    return D.nets.filter(function (n) {
+      if (n.red) return false;                   // a finding stays, always
+      var shown = n.boxes.filter(function (id) { return !hid[id]; });
+      return shown.length === 1 && want[shown[0]];
+    }).map(function (n) { return n.id; });
   }
 
   function applyHidden() {
@@ -1453,6 +1567,7 @@ EDITOR_JS = r"""
       if (n.degree < 2) nnRed += 1;      // a finding, hidden on purpose
     });
     var bits = [];
+    if (showStubs) bits.push('stubs shown');
     if (nb) bits.push(nb + ' instance(s) hidden');
     if (nn) {
       bits.push(nn + ' net(s) hidden' +
@@ -1537,10 +1652,37 @@ EDITOR_JS = r"""
     section('dropped with them', D.nets.filter(function (n) {
       return !hidNet[n.id] && netState(n) === 'orphan';
     }).map(function (n) {
+      var shown = n.boxes.filter(function (id) { return !hid[id]; });
       return { label: n.label,
-               why: n.degree < 2 ? 'was one-sided!' : 'left with one end' };
+               why: n.degree < 2 ? 'was one-sided!'
+                    : (shown.length ? 'left with one end - see [stubs]'
+                                    : 'nothing drawn on it') };
     }));
   }
+
+  document.getElementById('leafnets').onclick = function () {
+    var ids = selIds();
+    if (!ids.length) { alert('select the instances first'); return; }
+    var leaves = leafNetsOf(ids);
+    if (!leaves.length) {
+      alert('nothing hangs off just those - the red ones are findings and '
+            + 'are never hidden this way');
+      return;
+    }
+    var allHidden = leaves.every(function (id) { return hidNet[id]; });
+    leaves.forEach(function (id) {
+      if (allHidden) { delete hidNet[id]; } else { hidNet[id] = 'leaf'; }
+    });
+    touch();
+    relayout();
+  };
+
+  document.getElementById('stubs').onclick = function () {
+    showStubs = !showStubs;
+    this.classList.toggle('on', showStubs);
+    touch();
+    relayout();
+  };
 
   document.getElementById('hide').onclick = hideSelection;
   document.getElementById('showall').onclick = showAll;
@@ -1579,6 +1721,88 @@ EDITOR_JS = r"""
 
   function isNet(id) { return id.charAt(0) === 'n'; }
 
+  // ---- the inspector ---------------------------------------------------
+  var inspect = document.getElementById('inspect');
+  var inspectHead = document.getElementById('inspecthead');
+  var inspectBody = document.getElementById('inspectbody');
+
+  function line(k, v) {
+    var row = document.createElement('div');
+    row.className = 'line';
+    var a = document.createElement('span');
+    a.className = 'k';
+    a.textContent = k;
+    var b = document.createElement('span');
+    b.className = 'v';
+    b.textContent = v;
+    row.appendChild(a); row.appendChild(b);
+    inspectBody.appendChild(row);
+  }
+
+  function why(text) {
+    var d = document.createElement('div');
+    d.className = 'why';
+    d.textContent = text;
+    inspectBody.appendChild(d);
+  }
+
+  function drawInspector() {
+    var ids = selIds().concat(selNetIds());
+    if (ids.length !== 1) { inspect.classList.remove('on'); return; }
+    var n = byId[ids[0]];
+    if (!n) { inspect.classList.remove('on'); return; }
+    inspectHead.textContent = '';
+    inspectBody.textContent = '';
+
+    var title = document.createElement('span');
+    title.textContent = isNet(ids[0]) ? n.label : n.name;
+    inspectHead.appendChild(title);
+    var sub = document.createElement('span');
+    sub.className = 'sub';
+    sub.textContent = isNet(ids[0]) ? '  net' : '  ' + n.sub;
+    inspectHead.appendChild(sub);
+
+    if (!isNet(ids[0])) {
+      line('at', n.where || '');
+      if (n.rails && n.rails.length) line('supplies', n.rails.join(', '));
+      var on = D.nets.filter(function (m) {
+        return m.boxes.indexOf(n.id) >= 0; });
+      line('nets', on.length + ' (' + on.slice(0, 8).map(function (m) {
+        return m.label; }).join(', ') + (on.length > 8 ? ', …' : '') + ')');
+      inspect.classList.add('on');
+      return;
+    }
+
+    if (n.nets && n.nets.length > 1) line('nets', n.nets.join(', '));
+    var shown = n.boxes.filter(function (id) { return !hid[id]; });
+    line('instances', n.boxes.map(function (id) {
+      var b = byId[id];
+      return (b ? b.name : id) + (hid[id] ? ' (hidden)' : '');
+    }).join(', ') || 'none');
+    if (n.loads && n.loads.length) {
+      line('passives', n.loads.map(function (l) {
+        return l.name + ' ' + l.value; }).join(', '));
+    }
+    line('elements', String(n.degree));
+
+    // the question this panel exists for
+    if (n.red) {
+      why('one element touches this net in the whole deck - this is the '
+          + 'one-sided finding, drawn red.');
+    } else if (shown.length < 2) {
+      var kinds = (n.loads || []).map(function (l) { return l.kind; });
+      if (kinds.length) {
+        why('not red because ' + n.loads.length + ' passive(s) ('
+            + kinds.sort().join('') + ') sit on it as well as the instance, '
+            + 'so the deck has ' + n.degree + ' elements on this net.');
+      } else {
+        why('only one instance is drawn on it; the rest of what touches it '
+            + 'is hidden, so nothing here is a finding.');
+      }
+    }
+    inspect.classList.add('on');
+  }
+
   function paintSel() {
     D.boxes.forEach(function (b) {
       var el = document.getElementById(b.id);
@@ -1593,6 +1817,7 @@ EDITOR_JS = r"""
     if (nb) bits.push(nb + ' instance(s)');
     if (nn) bits.push(nn + ' net(s)');
     selinfo.textContent = bits.length ? bits.join(' + ') + ' selected' : '';
+    drawInspector();
   }
 
   function setSel(ids) {
@@ -1946,6 +2171,8 @@ def render_html(g, title="deck connectivity", header=(), layout=None):
     <button id="siblings" title="select every instance sharing this name stem: XIO_DQ0 picks up XIO_DQ1..7 (double-click a box does the same)">siblings</button>
     <button id="selfound" title="select every instance the find box matches">select found</button>
     <button id="hide" title="take the selected instances out of the picture (not out of the deck)">hide</button>
+    <button id="leafnets" title="hide or show the nets that hang off one selected instance - the red ones stay whatever you do">leaf nets</button>
+    <button id="stubs" title="show the nets that were dropped along with a hidden instance">stubs</button>
     <button id="hidden" title="list what is hidden and put back the ones you want">hidden\u2026</button>
     <button id="showall" title="bring everything hidden back">show all</button>
     <button id="save">save layout.json</button>
@@ -1969,6 +2196,7 @@ def render_html(g, title="deck connectivity", header=(), layout=None):
   </div>
   <div id="panelbody"></div>
 </div>
+<div id="inspect"><div id="inspecthead"></div><div id="inspectbody"></div></div>
 <div id="hint">wheel: zoom &middot; drag: pan &middot; click: trace a net
 &middot; editing: shift+drag to box-select, double-click for siblings</div>
 </div>

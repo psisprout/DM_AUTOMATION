@@ -350,6 +350,9 @@ def cmd_graph(args):
     if floating:
         header.append("%d one-sided net node(s), drawn in red"
                       % len(floating))
+    if g.absorbed:
+        header.append("%d passive(s) folded into their node, not drawn as "
+                      "instances" % g.absorbed)
     if g.hidden:
         crossing = len([n for n in g.nets if n.crosses])
         header.append("%d instance(s) hidden; %d net(s) still drawn reach "

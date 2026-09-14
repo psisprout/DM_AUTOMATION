@@ -135,12 +135,41 @@ XB a0 b0 sub
     def test_subckt_name_labels_the_box(self):
         dk = read_text(self.tmp, """* t
 XIO1 a b hbm_tx_drv
-R1 a 0 50
+R1 a b 50
 """)
         g = graph_mod.build(dk)
         labels = {b.name: b.sub_label for b in g.boxes}
         self.assertEqual(labels["XIO1"], "hbm_tx_drv")
         self.assertEqual(labels["R1"], "resistor")
+
+    def test_a_termination_is_a_property_of_its_node_not_a_box(self):
+        dk = read_text(self.tmp, """* t
+XIO1 a b hbm_tx_drv
+Rterm_1 a 0 1T
+Cload_1 a 0 10f
+""")
+        g = graph_mod.build(dk)
+        self.assertEqual([b.name for b in g.boxes], ["XIO1"])
+        self.assertEqual(g.absorbed, 2)
+        a = [n for n in g.nets if n.label == "a"][0]
+        self.assertEqual(sorted(l["name"] for l in a.loads),
+                         ["Cload_1", "Rterm_1"])
+        self.assertEqual(a.load_mark, "CR")
+        # three elements touch it, so it is not a finding - and the picture
+        # has to say why it is not red, which is what the mark is for
+        self.assertFalse(a.floating)
+        self.assertTrue(a.leaf)
+
+    def test_a_passive_between_two_signals_stays_a_box(self):
+        # absorbing it would break the connection the picture exists to show
+        dk = read_text(self.tmp, """* t
+XA pad x sub
+XB ball y sub
+Rseries pad ball 0.8
+""")
+        g = graph_mod.build(dk)
+        self.assertIn("Rseries", [b.name for b in g.boxes])
+        self.assertEqual(g.absorbed, 0)
 
 
 class HideTest(unittest.TestCase):
@@ -461,6 +490,23 @@ class HtmlTest(unittest.TestCase):
         self.assertIn('id="hide"', html)
         self.assertIn('id="showall"', html)
         self.assertIn("hiddenNames", html)
+
+    def test_the_viewer_can_answer_why_a_node_is_not_red(self):
+        html = graph_mod.render_html(self.graph(
+            "* t\nXA a b sub\nRterm a 0 1T\n"))
+        self.assertIn('id="inspect"', html)
+        self.assertIn("not red because", html)
+        # the passives have to reach the page for it to say which they are
+        self.assertIn('"loads"', html)
+        self.assertIn("Rterm", html)
+
+    def test_the_viewer_has_both_toggles(self):
+        html = graph_mod.render_html(self.graph())
+        self.assertIn('id="leafnets"', html)
+        self.assertIn('id="stubs"', html)
+        self.assertIn("showStubs", html)
+        # a finding is never swept up by the leaf-net toggle
+        self.assertIn("if (n.red) return false;", html)
 
     def test_the_viewer_lists_what_is_hidden(self):
         html = graph_mod.render_html(self.graph())
