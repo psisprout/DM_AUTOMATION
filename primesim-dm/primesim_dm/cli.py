@@ -331,7 +331,9 @@ def cmd_graph(args):
     rails = () if args.no_rails else (
         list(graph_mod.DEFAULT_RAILS) + (args.rail or []))
     g = graph_mod.build(dk, rails=rails, group_buses=not args.no_bus_groups,
-                        max_elements=args.max_elements)
+                        max_elements=args.max_elements,
+                        hide=args.hide or [], only=args.only or [],
+                        hide_names=(layout.hidden if layout else []))
 
     # the picture is only as complete as the read that produced it, so it
     # says on its face what was left out - same reason lint prints a header
@@ -342,6 +344,18 @@ def cmd_graph(args):
     if floating:
         header.append("%d one-sided net node(s), drawn in red"
                       % len(floating))
+    if g.hidden:
+        crossing = len([n for n in g.nets if n.crosses])
+        header.append("%d instance(s) hidden; %d net(s) reach them and are "
+                      "drawn dashed" % (g.hidden, crossing))
+    if g.lost:
+        # hiding is not free, and a finding that left the picture is worth
+        # more than a tidy picture
+        note = ("%d net(s) not drawn at all: every instance on them is hidden"
+                % g.lost)
+        if g.lost_floating:
+            note += " - %d of those were one-sided" % g.lost_floating
+        header.append(note)
     if dk.missing_includes:
         header.append("INCOMPLETE: %d include(s) could not be read"
                       % len(dk.missing_includes))
@@ -517,6 +531,13 @@ def build_parser():
                    help="draw supplies as ordinary nets (expect a hairball)")
     s.add_argument("--no-bus-groups", action="store_true",
                    help="draw dq0..dq7 as eight nets rather than one bus")
+    s.add_argument("--hide", action="append", metavar="REGEX",
+                   help="leave instances matching this out of the picture - "
+                        "matched on the instance name or the subckt it "
+                        "calls (repeatable). Connectivity is still worked "
+                        "out over the whole deck")
+    s.add_argument("--only", action="append", metavar="REGEX",
+                   help="draw only instances matching this (repeatable)")
     s.add_argument("--layout", metavar="FILE",
                    help="column arrangement to draw with, as saved from the "
                         "html viewer. Missing file: the automatic layout is "

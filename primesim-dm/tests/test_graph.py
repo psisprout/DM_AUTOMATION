@@ -143,6 +143,98 @@ R1 a 0 50
         self.assertEqual(labels["R1"], "resistor")
 
 
+class HideTest(unittest.TestCase):
+    """Hiding tidies the picture.  It must not change what the picture says."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    DECK = """* t
+XIO_DQ0  vdd pad0 spare0 dq_io
+XPKG_DQ0 ball0 pad0 pkg
+XIO_DQ1  vdd pad1 spare1 dq_io
+XPKG_DQ1 ball1 pad1 pkg
+"""
+
+    def graph(self, **kw):
+        return graph_mod.build(read_text(self.tmp, self.DECK), **kw)
+
+    def test_hiding_does_not_invent_one_sided_nets(self):
+        # pad0 joins XIO to XPKG.  Hide XPKG and pad0 is still a wired net -
+        # calling it one-sided would be a false alarm from a tool whose whole
+        # job is telling true ones from false
+        full = {n.label: n.floating for n in self.graph().nets}
+        self.assertFalse(full["pad0"])
+        hidden = self.graph(hide=["^XPKG_"])
+        pad0 = [n for n in hidden.nets if n.label == "pad0"][0]
+        self.assertFalse(pad0.floating)
+        self.assertTrue(pad0.crosses)
+        self.assertEqual(pad0.hidden_ends, 1)
+        self.assertEqual(pad0.degree, 2)
+
+    def test_a_really_one_sided_net_stays_one_sided(self):
+        g = self.graph(hide=["^XPKG_"])
+        spare = [n for n in g.nets if n.label.startswith("spare")][0]
+        self.assertTrue(spare.floating)
+        self.assertFalse(spare.crosses)
+
+    def test_findings_that_leave_the_picture_are_counted(self):
+        # ball0/ball1 hang off XPKG alone, so hiding XPKG takes two real
+        # one-sided nets off screen; that has to be said, not swallowed
+        g = self.graph(hide=["^XPKG_"])
+        self.assertEqual(g.hidden, 2)
+        self.assertEqual(g.lost, 2)
+        self.assertEqual(g.lost_floating, 2)
+        self.assertEqual([n.label for n in g.nets if n.label.startswith("ball")],
+                         [])
+
+    def test_hide_matches_the_subckt_too(self):
+        g = self.graph(hide=["pkg"])
+        self.assertEqual(sorted(b.name for b in g.boxes),
+                         ["XIO_DQ0", "XIO_DQ1"])
+
+    def test_only_keeps_just_what_matches(self):
+        g = self.graph(only=["^XIO_"])
+        self.assertEqual(sorted(b.name for b in g.boxes),
+                         ["XIO_DQ0", "XIO_DQ1"])
+        self.assertEqual(g.hidden, 2)
+
+    def test_hide_names_are_literal_not_patterns(self):
+        g = self.graph(hide_names=["XPKG_DQ0"])
+        self.assertEqual(sorted(b.name for b in g.boxes),
+                         ["XIO_DQ0", "XIO_DQ1", "XPKG_DQ1"])
+
+    def test_hiding_does_not_regroup_the_buses(self):
+        # grouping keys on the real endpoints, hidden ones included, so a
+        # label never changes shape just because the picture was tidied
+        full = set(n.label for n in self.graph().nets)
+        for net in self.graph(hide=["^XPKG_"]).nets:
+            self.assertIn(net.label, full)
+
+    def test_a_crossing_net_is_drawn_apart_from_a_floating_one(self):
+        svg = graph_mod.render_svg(self.graph(hide=["^XPKG_"]))
+        self.assertIn('class="cross"', svg)
+        self.assertIn('class="float"', svg)
+        self.assertIn("also reaches 1 instance(s) not drawn", svg)
+
+    def test_the_layout_file_remembers_what_was_hidden(self):
+        lay = graph_mod.load_layout(graph_mod.dump_layout(graph_mod.Layout(
+            ["a"], {"XIO_DQ0": {"column": 0, "row": 0}},
+            hidden=["XPKG_DQ0"])))
+        self.assertEqual(lay.hidden, ["XPKG_DQ0"])
+        g = self.graph(hide_names=lay.hidden)
+        self.assertNotIn("XPKG_DQ0", [b.name for b in g.boxes])
+
+    def test_a_bad_hidden_list_is_refused(self):
+        with self.assertRaises(graph_mod.LayoutError):
+            graph_mod.load_layout('{"columns":["a"],"hidden":"XPKG"}')
+
+
 class RenderTest(unittest.TestCase):
     def setUp(self):
         import tempfile
@@ -288,6 +380,25 @@ class HtmlTest(unittest.TestCase):
         self.assertIn("'mouseup'", html)
         # and the labels must not be selected instead of dragged
         self.assertIn("-moz-user-select: none", html)
+
+    def test_status_text_sits_outside_the_button_row(self):
+        # writing "3 selected" among the buttons made the bar wrap, which
+        # moved the canvas between a press and its release
+        html = graph_mod.render_html(self.graph())
+        bar = html[html.index('<div id="bar">'):html.index('<div id="stage">')]
+        status = bar[bar.index('<div id="status">'):]
+        for live in ('id="selinfo"', 'id="hideinfo"', 'id="dirty"',
+                     'id="notes"'):
+            self.assertIn(live, status)
+        # and the feedback overlays must not take a press from a box
+        self.assertIn("#dropzones, #dropline, #band { pointer-events: none; }",
+                      html)
+
+    def test_the_viewer_can_hide_instances(self):
+        html = graph_mod.render_html(self.graph())
+        self.assertIn('id="hide"', html)
+        self.assertIn('id="showall"', html)
+        self.assertIn("hiddenNames", html)
 
     def test_the_viewer_can_select_more_than_one_instance(self):
         html = graph_mod.render_html(self.graph())

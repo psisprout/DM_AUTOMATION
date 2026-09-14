@@ -373,6 +373,47 @@ hbm_tx_rx.sp
 1 one-sided net node(s), drawn in red
 ```
 
+### 안 볼 인스턴스 빼기
+
+덱 검증 중에 그림이 복잡하면 인스턴스를 빼고 볼 수 있습니다. **덱에서 빼는 게 아니라
+그림에서만 빼는 것**이고, 인스턴스 이름이나 그게 부르는 subckt 로 고릅니다.
+
+```bash
+primesim-dm graph deck.sp --hide '^VTX'        # 자극원은 빼고 보기
+primesim-dm graph deck.sp --hide 'pkg_'        # subckt 이름으로도 됨
+primesim-dm graph deck.sp --only 'XIO_'        # IO 만 보기
+```
+
+뷰어에서는 `[edit layout]` → 인스턴스 선택 → `hide`. (비트별 IO면 하나 더블클릭해서
+8개 잡고 한 번에.) `show all` 로 되돌리고, `save layout.json` 에 같이 저장돼서
+다음에 `--layout` 으로 그릴 때도 빠진 채로 나옵니다.
+
+**여기서 제일 중요한 건 숨겨도 연결성 판정이 안 바뀐다는 겁니다.** `XPKG_DQ0` 을
+숨겼다고 `pad_dq0` 이 "한쪽만 연결됨(빨강)"이 되면, 검증하려고 쓰는 도구가 거짓
+경보를 만드는 셈입니다. 그래서 **한쪽만 연결됐는지는 언제나 덱 전체로 판정하고**,
+숨김은 그리기에만 적용됩니다.
+
+| 그려지는 것 | 뜻 |
+|---|---|
+| 빨간 알약 | 덱에서 진짜 한쪽만 연결됨 |
+| **회색 점선 알약 + `→`** | 연결은 돼 있는데 **상대가 화면 밖**(숨긴 인스턴스) |
+
+**숨기는 건 공짜가 아닙니다.** 붙어 있던 인스턴스를 전부 숨기면 그 net은 아예 안
+그려지는데, 그중에 진짜 문제가 있었으면 그림에서 사라집니다. 그래서 헤더에 그 수를
+찍습니다:
+
+```
+18 element(s), 32 net node(s)
+16 one-sided net node(s), drawn in red
+8 instance(s) hidden; 8 net(s) reach them and are drawn dashed
+8 net(s) not drawn at all: every instance on them is hidden - 8 of those were one-sided
+```
+
+마지막 줄이 "지금 8개를 못 보고 있다"는 뜻입니다. 뷰어에서도 같은 내용이 상태줄에 뜹니다.
+
+> `lint` 에는 숨기기를 넣지 않았습니다. 리포트에서 인스턴스를 빼는 건 에러를 빼는
+> 것과 같아서요. 읽는 범위를 줄이려면 `--opaque` / `--skip` 을 쓰세요.
+
 ### 컬럼을 직접 정해서 배치하기
 
 자동 배치는 **연결 관계만 보고 하는 추측**입니다. 이 넷이 TX 쪽이고 저건 패키지라는 건
@@ -441,6 +482,7 @@ N개인 셈이라, 오른쪽으로 늘어놓으면 8비트짜리가 컬럼 18개
 {
   "version": 1,
   "columns": [{ "name": "TX" }, { "name": "channel" }, { "name": "RX" }],
+  "hidden": ["VTX0", "VTX1"],
   "elements": {
     "XCH":  { "column": 1, "row": 0 },
     "XRX":  { "column": 2, "row": 0 },
