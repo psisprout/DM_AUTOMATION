@@ -236,6 +236,23 @@ INFO  merged-net         ball_dq0 and ball_dq1 are one node (Rshort = 0 ohm)
 
 net 이름은 SPICE 규칙대로 대소문자를 구분하지 않습니다 (`PAD_DQ0` = `pad_dq0`).
 
+**한 인스턴스가 같은 net 을 두 포트에 물린 건 "연결"로 세지 않습니다.**
+
+```
+X_RDL bump_vssi_3 bump_vssi_3 pad_a lone rdl
+```
+
+SPICE 문법으로는 두 핀이 한 노드인 게 맞습니다. 하지만 DM 검사가 묻는 건 "이 노드가
+**다른 무언가**에 이어져 있나"이고, 인스턴스가 자기 노드를 두 번 짚은 건 그 답이
+아닙니다. 그래서 붙은 **소자 개수**로 세고, 위 경우는 이렇게 잡힙니다:
+
+```
+WARN  floating-net  net bump_vssi_3 is touched only by X_RDL and nothing else, at ports 0, 1
+```
+
+포트 번호를 같이 찍는 건, 파일만 보면 연결된 것처럼 보이는 게 바로 이 경우라서입니다.
+`graph` 도 같은 기준이라 빨갛게 나오고, `terminate` 도 후보로 올립니다.
+
 ## 2-2. `terminate` — 뜬 노드에 터미네이션 달기
 
 한쪽만 연결된 노드를 찾아 R/C 터미네이션 줄을 만들어 줍니다. `lint` 와 같은

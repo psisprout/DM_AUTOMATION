@@ -125,6 +125,7 @@ class Netlist(object):
         self.term_elements = []
         self.warnings = []
         self.net_users = {}          # net -> list of "INST.PORT" strings
+        self.net_owners = {}         # net -> the distinct things on it
         self.open_nets = set()       # deliberately left open (type: open)
         self.auto_terminated = []    # bindings the floating pass loaded
 
@@ -423,16 +424,25 @@ class Resolver(object):
 
     def _index_nets(self, nl):
         nl.net_users = {}
+        nl.net_owners = {}
+        def owner(net, name):
+            # two pins of one instance on the same net is one thing touching
+            # it, not two: counting ports would call that node connected
+            nl.net_owners.setdefault(net, set()).add(name)
+
         for _inst, _sub, bindings in nl.instances:
             for b in bindings:
                 nl.net_users.setdefault(b.net, []).append(
                     "%s.%s" % (b.inst, b.port))
+                owner(b.net, b.inst)
         for el in nl.term_elements:
             for node in el.nodes:
                 nl.net_users.setdefault(node, []).append(el.name)
+                owner(node, el.name)
         for sup in self.cfg["supplies"]:
             net = self._normalize_net(str(sup["net"]))
             nl.net_users.setdefault(net, []).append("supply")
+            owner(net, "supply")
         # raw / stimulus lines: count any token that is already a known net so
         # a hand-written stimulus does not show up as a floating node
         known = set(nl.net_users)
@@ -442,6 +452,7 @@ class Resolver(object):
             for tok in re.split(r"[\s,()=]+", str(line)):
                 if tok in known:
                     nl.net_users.setdefault(tok, []).append("raw")
+                    owner(tok, "raw")
 
     def _is_kept(self, net):
         if net in ("0", "gnd", "GND"):
@@ -457,7 +468,8 @@ class Resolver(object):
     def _floating_pass(self, nl):
         floating = []
         for net, users in sorted(nl.net_users.items()):
-            if len(users) >= 2 or self._is_kept(net) or net in nl.open_nets:
+            if (len(nl.net_owners.get(net, ())) >= 2 or self._is_kept(net)
+                    or net in nl.open_nets):
                 continue
             floating.append((net, users[0]))
         if not floating:

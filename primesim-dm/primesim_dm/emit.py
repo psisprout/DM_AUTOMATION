@@ -189,7 +189,10 @@ def render_report(cfg, nl, subckt_files):
     out.append("-" * 60)
     out.append("ports: %d total, %d terminated" % (total, termed))
 
-    singles = [(n, u) for n, u in sorted(nl.net_users.items()) if len(u) < 2]
+    # counted over the distinct things on a net, so an instance that ties
+    # two of its own pins together does not read as a connection
+    singles = [(n, u) for n, u in sorted(nl.net_users.items())
+               if len(nl.net_owners.get(n, ())) < 2]
     out.append("nets : %d" % len(nl.net_users))
     if singles:
         out.append("")

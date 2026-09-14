@@ -42,6 +42,22 @@ def parse_value(token):
     return base                          # unknown trailing unit e.g. "10ohm"
 
 
+def touching(users):
+    """How many distinct elements sit on a net.
+
+    Not how many ports do.  An instance that passes the same net to two of
+    its pins shows up twice in ``net_users``, and counting those as two
+    connections calls a node wired when only one thing in the whole deck
+    reaches it - which is exactly the node a DM check exists to find.
+    """
+    return len({id(el) for el, _idx in users})
+
+
+def ports_of(users, el):
+    """The port indices at which one element touches a net."""
+    return [idx for other, idx in users if other is el]
+
+
 class Finding(object):
     def __init__(self, severity, code, message, where=""):
         self.severity = severity
@@ -174,7 +190,7 @@ class Checker(object):
                 continue
             if any(rx.search(net) for rx in self.keep):
                 continue
-            if len(users) >= 2:
+            if touching(users) >= 2:
                 continue
             el, idx = users[0]
             out.append((net, el, idx))
@@ -182,9 +198,17 @@ class Checker(object):
 
     def check_floating(self):
         for net, el, idx in self.floating_nets():
+            ports = ports_of(self.deck.net_users.get(net, []), el)
+            if len(ports) > 1:
+                # the confusing one: two pins of one instance on the same
+                # net looks like a connection in the file and is not one
+                where = ("%s and nothing else, at ports %s"
+                         % (el.name, ", ".join(str(p) for p in ports)))
+            else:
+                where = "%s (port %d)" % (el.name, idx)
             self.add(SEV_WARN, "floating-net",
-                     "net %s is touched only by %s (port %d)"
-                     % (net, el.name, idx), el.where())
+                     "net %s is touched only by %s" % (net, where),
+                     el.where())
 
     def check_unconnected_instances(self):
         """An X instance every one of whose nodes is otherwise unused."""
@@ -192,7 +216,7 @@ class Checker(object):
             if el.kind != "X" or not el.nodes:
                 continue
             lonely = [n for n in el.nodes
-                      if len(self.deck.net_users.get(n, [])) < 2
+                      if touching(self.deck.net_users.get(n, [])) < 2
                       and n not in self.ground and n not in self.deck.globals]
             if len(lonely) == len(el.nodes):
                 self.add(SEV_ERROR, "isolated-instance",
@@ -211,7 +235,7 @@ class Checker(object):
             # so its nets look one-sided. Reporting hundreds of those as
             # findings would bury the one problem that caused them.
             n_float = sum(1 for net, users in self.deck.net_users.items()
-                          if len(users) < 2 and net not in self.ground
+                          if touching(users) < 2 and net not in self.ground
                           and net not in self.deck.globals)
             self.add(SEV_WARN, "checks-skipped",
                      "connectivity checks (floating-net, isolated-instance) "

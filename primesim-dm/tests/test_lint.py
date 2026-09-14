@@ -532,3 +532,67 @@ class TestTerminationOutput(Harness):
         self.assertEqual(floating, [])
         self.assertIn("nothing to terminate",
                       check.render_terminations(dk, floating))
+
+
+class TestSamePinTwice(Harness):
+    """A net an instance passes to two of its own pins is not connected.
+
+    SPICE says the two pins are one node, and that is true; it is just not
+    what a DM check is asked.  "Is this node wired to anything?" is about
+    other elements, and an instance reaching a node twice still leaves that
+    node ending inside it.
+    """
+
+    DECK = """* t
+.subckt rdl a b c d
+R1 a b 0.1
+R2 c d 0.1
+.ends
+.subckt drv p q
+R1 p q 1k
+.ends
+X_RDL bump_vssi_3 bump_vssi_3 pad_a lone rdl
+X_DRV pad_a other drv
+.end
+"""
+
+    def test_a_doubly_tied_net_is_still_one_sided(self):
+        _dk, _c, findings = self.lint(self.DECK)
+        floating = [f for f in findings if f.code == "floating-net"]
+        nets = sorted(f.message.split()[1] for f in floating)
+        self.assertIn("bump_vssi_3", nets)
+        self.assertIn("lone", nets)
+        self.assertNotIn("pad_a", nets)     # two elements really do touch it
+
+    def test_the_message_names_both_ports(self):
+        _dk, _c, findings = self.lint(self.DECK)
+        msg = [f.message for f in findings
+               if f.code == "floating-net" and "bump_vssi_3" in f.message][0]
+        self.assertIn("X_RDL and nothing else, at ports 0, 1", msg)
+
+    def test_one_port_still_reads_the_old_way(self):
+        _dk, _c, findings = self.lint(self.DECK)
+        msg = [f.message for f in findings
+               if f.code == "floating-net" and " lone " in f.message][0]
+        self.assertIn("(port 3)", msg)
+
+    def test_touching_counts_elements_not_ports(self):
+        dk, _c, _f = self.lint(self.DECK)
+        self.assertEqual(len(dk.net_users["bump_vssi_3"]), 2)   # two ports
+        self.assertEqual(check.touching(dk.net_users["bump_vssi_3"]), 1)
+        self.assertEqual(check.touching(dk.net_users["pad_a"]), 2)
+
+    def test_terminate_offers_it(self):
+        # it was invisible to the termination pass for the same reason
+        _dk, c, _f = self.lint(self.DECK)
+        self.assertIn("bump_vssi_3", [n for n, _el, _i in c.floating_nets()])
+
+    def test_an_instance_reaching_only_itself_is_isolated(self):
+        _dk, _c, findings = self.lint("""* t
+.subckt rdl a b
+R1 a b 0.1
+.ends
+X_ALONE selfnet selfnet rdl
+.end
+""")
+        self.assertIn("isolated-instance", self.codes(findings))
