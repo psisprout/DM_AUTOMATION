@@ -289,6 +289,7 @@ Rterm_2   odt_en     0   1T   $ XIO port 5 (deck.sp:4)
 | `--prefix` | `Rterm_` | 소자 이름 접두사 |
 | `--exclude REGEX` | | 이 net은 건드리지 않음 (반복 가능) |
 | `--nodes-only` | | **소자 안 만들고 노드 목록만** 출력 |
+| `--sort net\|instance` | `net` | 정렬 기준 (아래 참고) |
 
 ```bash
 # 커패시터로, vss 기준, 테스트핀은 제외
@@ -299,6 +300,29 @@ primesim-dm terminate deck.sp --nodes-only
 ```
 
 생성되는 소자 이름은 덱에 이미 있는 이름과 겹치지 않게 번호를 건너뜁니다.
+
+### `--sort instance` — 인스턴스별로 묶어서
+
+```bash
+primesim-dm terminate deck.sp --sort instance -o term.inc
+```
+
+```
+*--- XIO_DQ0  (3 node(s)) -------------------------------------------------
+Rterm_1  txd0      0  1T   $ XIO_DQ0 port 3 (deck.sp:3)
+Rterm_2  rxd0      0  1T   $ XIO_DQ0 port 4 (deck.sp:3)
+Rterm_3  odt0      0  1T   $ XIO_DQ0 port 5 (deck.sp:3)
+*
+*--- XPKG_DQ0  (1 node(s)) ------------------------------------------------
+Rterm_4  ball_dq0  0  1T   $ XPKG_DQ0 port 1 (deck.sp:4)
+```
+
+**인스턴스는 덱에 나온 순서, 그 안에서는 포트 순서**입니다. 검토를 원래 그렇게 하니까요 —
+블록 하나씩, 그 블록의 핀 목록과 대조해서. 인스턴스마다 몇 개인지도 헤더에 찍힙니다.
+
+기본값이 `net` 인 이유는 **저장해둔 파일과 다음 번 결과를 diff** 뜨기 위해서입니다.
+덱에 인스턴스 하나를 끼워 넣으면 `instance` 정렬은 그 아래가 전부 밀리지만, `net`
+정렬은 새로 생긴 줄만 늘어납니다.
 
 **읽지 못한 include가 있으면 거부합니다.** 그 파일 안의 소자가 빠져서 뜬 것처럼 보이는
 net까지 터미네이션하면 진짜 문제를 덮어버리기 때문입니다. `--force` 로 넘길 수는 있습니다.

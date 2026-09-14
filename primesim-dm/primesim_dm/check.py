@@ -270,13 +270,18 @@ TERM_TYPES = ("rload", "cload", "rc", "none")
 
 
 def render_terminations(deck, floating, kind="rload", value="1T", value2="1f",
-                        to="0", prefix="Rterm_", source=None):
+                        to="0", prefix="Rterm_", source=None, sort="net"):
     """A .inc of termination elements for the nets nothing else touches.
 
     Deliberately a separate file rather than an edit to the deck: a net with
     one connection is as likely to be a wire someone forgot as a pin nobody
     uses, and the two look identical from here.  Each line carries the
     instance and port it came from so the difference can be judged.
+
+    ``sort="instance"`` puts the lines under the instance they came from, in
+    deck order and then by port, which is how the judging actually goes: one
+    block at a time, against that block's pin list.  The default stays by net
+    name so an existing file diffs against the next run.
     """
     import datetime
 
@@ -298,8 +303,23 @@ def render_terminations(deck, floating, kind="rload", value="1T", value2="1f",
         out.append("* nothing to terminate")
         return "\n".join(out) + "\n"
 
+    if sort == "instance":
+        where = {id(el): i for i, el in enumerate(deck.elements)}
+        floating = sorted(floating,
+                          key=lambda f: (where.get(id(f[1]), 0), f[2], f[0]))
+
     n = 0
+    group = None
     for net, el, idx in floating:
+        # grouped on identity, not on the name: a deck with the same name
+        # twice is an error the checker reports, and until it is fixed the
+        # two want their own headings rather than one merged count
+        if sort == "instance" and id(el) != group:
+            group = id(el)
+            mine = sum(1 for f in floating if id(f[1]) == group)
+            head = "*--- %s  (%d node(s)) " % (el.name, mine)
+            out.append("*")
+            out.append(head + "-" * max(4, 75 - len(head)))
         note = "$ %s port %d (%s)" % (el.name, idx, el.where())
         if kind == "none":
             out.append("* %-28s %s" % (net, note))

@@ -289,7 +289,8 @@ def cmd_terminate(args):
     text = check_mod.render_terminations(
         dk, floating, kind="none" if args.nodes_only else args.type,
         value=args.value, value2=args.value2, to=args.to,
-        prefix=args.prefix, source=os.path.abspath(args.deck[0]))
+        prefix=args.prefix, source=os.path.abspath(args.deck[0]),
+        sort=args.sort)
 
     if args.output:
         parent = os.path.dirname(os.path.abspath(args.output))
@@ -510,6 +511,11 @@ def build_parser():
                    help="net the termination returns to (default 0)")
     s.add_argument("--prefix", default="Rterm_",
                    help="element name prefix (default Rterm_)")
+    s.add_argument("--sort", choices=("net", "instance"), default="net",
+                   help="net: one list ordered by net name (default, so a "
+                        "saved file diffs against the next run). instance: "
+                        "grouped under the instance each node came from, in "
+                        "deck order then by port - the order you review in")
     s.add_argument("--nodes-only", action="store_true",
                    help="just list the nodes, generate no elements")
     s.add_argument("--exclude", action="append", metavar="REGEX",

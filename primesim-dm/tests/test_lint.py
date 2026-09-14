@@ -596,3 +596,62 @@ X_ALONE selfnet selfnet rdl
 .end
 """)
         self.assertIn("isolated-instance", self.codes(findings))
+
+
+class TestTerminationOrder(Harness):
+    DECK = """* t
+.subckt io a b c d
+R1 a b 1k
+R2 c d 1k
+.ends
+.subckt pkg p q
+R1 p q 1
+.ends
+XIO_1  pad1 zz_late aa_early mid1 io
+XPKG_1 ball1 pad1 pkg
+XIO_0  pad0 zz_first aa_second mid0 io
+.end
+"""
+
+    def render(self, **kw):
+        dk, c, _f = self.lint(self.DECK)
+        return check.render_terminations(dk, c.floating_nets(), **kw)
+
+    def nets_in(self, text):
+        out = []
+        for line in text.splitlines():
+            if line.startswith("Rterm_"):
+                out.append(line.split()[1])
+        return out
+
+    def test_by_net_is_still_the_default(self):
+        nets = self.nets_in(self.render())
+        self.assertEqual(nets, sorted(nets))
+
+    def test_by_instance_follows_the_deck_then_the_ports(self):
+        text = self.render(sort="instance")
+        # deck order: XIO_1 before XPKG_1 before XIO_0, and within an
+        # instance the pins come in the order they are written
+        # pad1 joins XIO_1 to XPKG_1 so it is not one-sided; pad0 has no
+        # partner, which is why XIO_0 brings four
+        self.assertEqual(self.nets_in(text),
+                         ["zz_late", "aa_early", "mid1",
+                          "ball1", "pad0", "zz_first", "aa_second", "mid0"])
+
+    def test_each_instance_gets_a_heading_with_its_count(self):
+        text = self.render(sort="instance")
+        self.assertIn("*--- XIO_1  (3 node(s))", text)
+        self.assertIn("*--- XPKG_1  (1 node(s))", text)
+        self.assertIn("*--- XIO_0  (4 node(s))", text)
+        self.assertEqual(text.count("*--- "), 3)
+
+    def test_the_listing_form_groups_too(self):
+        text = self.render(sort="instance", kind="none")
+        self.assertIn("*--- XIO_1  (3 node(s))", text)
+        self.assertNotIn("Rterm_", text)
+
+    def test_numbering_follows_whatever_order_was_asked_for(self):
+        text = self.render(sort="instance")
+        first = [l for l in text.splitlines() if l.startswith("Rterm_")][0]
+        self.assertTrue(first.startswith("Rterm_1 "))
+        self.assertIn("zz_late", first)
