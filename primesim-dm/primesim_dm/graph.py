@@ -301,6 +301,12 @@ def _layer(g):
 
     Breadth-first from the busiest element, so the instance everything hangs
     off lands on the left and the picture reads outward from it.
+
+    Every connected part starts again at column 0 and stacks underneath the
+    last, rather than continuing to the right.  An IO called out bit by bit
+    is eight or sixty-four separate parts of exactly the same shape, and
+    marching them rightwards turns a three-column picture into a sixty-column
+    one where nothing lines up with its opposite number.
     """
     adj = {}
     for net in g.nets:
@@ -309,19 +315,18 @@ def _layer(g):
             adj.setdefault(id(net), []).append(box)
 
     seen = set()
-    column = 0
     roots = sorted(g.boxes, key=lambda b: -len(adj.get(id(b), ())))
     order_seq = 0
 
     for root in roots:
         if id(root) in seen:
             continue
-        root.layer = column
+        root.layer = 0
         root.order = order_seq
         order_seq += 1
         seen.add(id(root))
         frontier = [root]
-        depth = column
+        depth = 0
         while frontier:
             nxt = []
             for node in frontier:
@@ -335,11 +340,6 @@ def _layer(g):
                     nxt.append(peer)
             frontier = nxt
             depth += 1
-        # isolated nets of the next component start past this one
-        column = max([n.layer for n in g.boxes + g.nets if id(n) in seen] or
-                     [column]) + 1
-        if column % 2:
-            column += 1
 
     # nets nothing reached (every endpoint dropped) sit one past their box
     for net in g.nets:
@@ -549,7 +549,8 @@ def render_svg(g, title="deck connectivity", header=(), embed_header=True,
 
     out.append('<g id="scene">')
     out.append('<g id="colheads"></g><g id="dropzones"></g>'
-               '<line id="dropline" x1="0" y1="0" x2="0" y2="0"/>')
+               '<line id="dropline" x1="0" y1="0" x2="0" y2="0"/>'
+               '<rect id="band" x="0" y="0" width="0" height="0"/>')
 
     if layout is not None and g.columns:
         for i, name in enumerate(g.columns):
@@ -717,11 +718,20 @@ body.editing #scene .node.lift { cursor: grabbing; opacity: 0.85; }
 #dropzones rect { fill: transparent; }
 #dropzones rect.hot { fill: rgba(70,130,200,0.13); }
 #dropline { stroke: #2f6fb5; stroke-width: 3; display: none; }
+#band { fill: rgba(47,111,181,0.10); stroke: #2f6fb5; stroke-width: 1.2;
+        stroke-dasharray: 4 3; display: none; }
+#scene .node.sel rect { stroke: #2f6fb5; stroke-width: 2.8; }
+#scene .node.sel rect.box { fill: #dcebff; }
+#selinfo { color: #2f6fb5; }
 @media (prefers-color-scheme: dark) {
   #edit.on { background: #24405e; border-color: #5b86bd; }
   #dirty { color: #e0a952; }
   #dropzones rect.hot { fill: rgba(120,170,230,0.16); }
   #dropline { stroke: #8fb4d9; }
+  #band { fill: rgba(143,180,217,0.12); stroke: #8fb4d9; }
+  #scene .node.sel rect { stroke: #8fb4d9; }
+  #scene .node.sel rect.box { fill: #2b3a4d; }
+  #selinfo { color: #8fb4d9; }
 }
 @media (prefers-color-scheme: dark) {
   body { background: #12161c; color: #e8edf4; }
@@ -822,7 +832,7 @@ VIEWER_JS = r"""
   function onDown(e) {
     if (e.button) return;                     // left button only
     var node = nodeAt(e.target);
-    if (node && window.__editorDown && window.__editorDown(e, node, at(e))) {
+    if (window.__editorDown && window.__editorDown(e, node, at(e))) {
       e.preventDefault();                     // no native text drag
       editDrag = true;
       listen();
@@ -851,8 +861,8 @@ VIEWER_JS = r"""
     unlisten();
     if (editDrag) {
       editDrag = false;
-      window.__editorUp();
-      justArranged = true;
+      // only swallow the click that follows if something actually moved
+      justArranged = !!window.__editorUp();
       return;
     }
     drag = null;
@@ -907,11 +917,13 @@ VIEWER_JS = r"""
     n.addEventListener('click', function (e) {
       e.stopPropagation();
       if (justArranged) { justArranged = false; return; }
+      if (window.__editorClick && window.__editorClick(n, e)) return;
       if (n.classList.contains('hot')) { clear(); } else { focus(n.id); }
     });
   });
   svg.addEventListener('click', function () {
     if (justArranged) { justArranged = false; return; }
+    if (window.__editorBgClick && window.__editorBgClick()) return;
     if (!dragged) clear();
   });
 
@@ -1078,6 +1090,7 @@ EDITOR_JS = r"""
     });
     redrawWires();
     drawHeads();
+    if (typeof paintSel === 'function') paintSel();
   }
 
   function clip(cx, cy, tx, ty, n) {
@@ -1146,7 +1159,94 @@ EDITOR_JS = r"""
     select(cur);
   }
 
-  // ---- dragging an instance into a column ------------------------------
+  // ---- selection -------------------------------------------------------
+  // An IO called out bit by bit is 8 or 64 instances that belong in the same
+  // column, and dragging them one at a time is not a feature.  The stem rule
+  // is the one the nets already use: XIO_DQ0..7 share a stem, so one of them
+  // can pick up the rest.
+  var sel = {};
+  var band = document.getElementById('band');
+  var selinfo = document.getElementById('selinfo');
+
+  function stemOf(name) {
+    var mo = /^(.*?)[<\[(]?(\d+)[>\])]?$/.exec(name);
+    return (mo && mo[1]) ? mo[1].replace(/_+$/, '') : name;
+  }
+
+  function selIds() {
+    return D.boxes.filter(function (b) { return sel[b.id]; })
+                  .map(function (b) { return b.id; });
+  }
+
+  function paintSel() {
+    D.boxes.forEach(function (b) {
+      var el = document.getElementById(b.id);
+      if (el) el.classList.toggle('sel', !!sel[b.id]);
+    });
+    var n = selIds().length;
+    selinfo.textContent = n ? n + ' selected' : '';
+  }
+
+  function setSel(ids) {
+    sel = {};
+    ids.forEach(function (id) { sel[id] = true; });
+    paintSel();
+  }
+
+  function addSel(ids) {
+    ids.forEach(function (id) { sel[id] = true; });
+    paintSel();
+  }
+
+  function clearSel() { sel = {}; paintSel(); }
+
+  function siblingsOf(ids) {
+    var stems = {};
+    ids.forEach(function (id) {
+      var b = byId[id];
+      if (b) stems[stemOf(b.name)] = 1;
+    });
+    return D.boxes.filter(function (b) { return stems[stemOf(b.name)]; })
+                  .map(function (b) { return b.id; });
+  }
+
+  window.__editorClick = function (node, e) {
+    if (!editing) return false;
+    if (!node.classList.contains('box-node')) return false;   // nets: trace
+    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+      if (sel[node.id]) { delete sel[node.id]; paintSel(); }
+      else { addSel([node.id]); }
+    } else if (e.detail >= 2) {
+      setSel(siblingsOf([node.id]));
+    } else {
+      setSel([node.id]);
+    }
+    return true;
+  };
+
+  window.__editorBgClick = function () {
+    if (!editing) return false;
+    clearSel();
+    return true;
+  };
+
+  document.getElementById('siblings').onclick = function () {
+    var ids = selIds();
+    if (!ids.length) { alert('select an instance first'); return; }
+    setSel(siblingsOf(ids));
+  };
+
+  document.getElementById('selfound').onclick = function () {
+    var q = (document.getElementById('find').value || '').trim().toLowerCase();
+    if (!q) { alert('type something in the find box first'); return; }
+    setSel(D.boxes.filter(function (b) {
+      var el = document.getElementById(b.id);
+      var hay = (el && el.getAttribute('data-search')) || b.name;
+      return hay.toLowerCase().indexOf(q) >= 0;
+    }).map(function (b) { return b.id; }));
+  };
+
+  // ---- dragging the selection into a column ----------------------------
   var lift = null;
 
   function columnAt(x) {
@@ -1160,9 +1260,9 @@ EDITOR_JS = r"""
     return best;
   }
 
-  function rowAt(col, y, movingId) {
+  function rowAt(col, y, moving) {
     var members = D.boxes.filter(function (b) {
-      return place[b.id].col === col && b.id !== movingId; });
+      return place[b.id].col === col && !moving[b.id]; });
     members.sort(function (a, b) { return place[a.id].row - place[b.id].row; });
     for (var i = 0; i < members.length; i++) {
       if (y < members[i].ny + members[i].h / 2) return { index: i, members: members };
@@ -1171,17 +1271,54 @@ EDITOR_JS = r"""
   }
 
   window.__editorDown = function (e, node, pt) {
-    if (!editing || !node.classList.contains('box-node')) return false;
-    lift = { id: node.id, node: node, start: window.__toScene(pt) };
-    node.classList.add('lift');
+    if (!editing) return false;
+    var at = window.__toScene(pt);
+
+    if (!node) {
+      if (!e.shiftKey) return false;          // plain background drag pans
+      lift = { band: true, x0: at.x, y0: at.y };
+      band.style.display = 'block';
+      band.setAttribute('width', 0);
+      band.setAttribute('height', 0);
+      return true;
+    }
+    if (!node.classList.contains('box-node')) return false;
+    // a modifier means the press is about the selection, not a drag: leave
+    // it to the click handler, which knows add from replace
+    if (e.ctrlKey || e.metaKey || e.shiftKey) return false;
+
+    // pressing something already selected drags the whole selection;
+    // pressing anything else starts a fresh one-instance selection
+    if (!sel[node.id]) setSel([node.id]);
+    var ids = selIds();
+    var moving = {};
+    ids.forEach(function (id) {
+      moving[id] = true;
+      var el = document.getElementById(id);
+      if (el) el.classList.add('lift');
+    });
+    ids.sort(function (a, b) {
+      var pa = place[a], pb = place[b];
+      return pa.col - pb.col || pa.row - pb.row;
+    });
+    lift = { ids: ids, moving: moving, start: at };
     return true;
   };
 
   window.__editorMove = function (raw) {
     if (!lift) return false;
     var pt = window.__toScene(raw);
+
+    if (lift.band) {
+      band.setAttribute('x', Math.min(lift.x0, pt.x));
+      band.setAttribute('y', Math.min(lift.y0, pt.y));
+      band.setAttribute('width', Math.abs(pt.x - lift.x0));
+      band.setAttribute('height', Math.abs(pt.y - lift.y0));
+      return true;
+    }
+
     var col = columnAt(pt.x);
-    var spot = rowAt(col, pt.y, lift.id);
+    var spot = rowAt(col, pt.y, lift.moving);
     var g = geo[col * 2] || { x: G.margin, w: 130 };
     var y;
     if (spot.members.length === 0) { y = bounds().top; }
@@ -1198,20 +1335,39 @@ EDITOR_JS = r"""
 
   window.__editorUp = function () {
     if (!lift) return false;
-    lift.node.classList.remove('lift');
+
+    if (lift.band) {
+      var bx = +band.getAttribute('x'), by = +band.getAttribute('y');
+      var bw = +band.getAttribute('width'), bh = +band.getAttribute('height');
+      band.style.display = 'none';
+      lift = null;
+      if (bw < 3 && bh < 3) return false;     // a shift-click, not a sweep
+      setSel(D.boxes.filter(function (b) {
+        return b.nx < bx + bw && b.nx + b.w > bx &&
+               b.ny < by + bh && b.ny + b.h > by;
+      }).map(function (b) { return b.id; }));
+      return true;
+    }
+
+    lift.ids.forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.classList.remove('lift');
+    });
     dropline.style.display = 'none';
     [].forEach.call(zones.children, function (r) { r.classList.remove('hot'); });
+    var moved = false;
     if (lift.drop) {
       var d = lift.drop;
-      d.members.splice(d.index, 0, { id: lift.id });
+      var rows = lift.ids.map(function (id) { return { id: id }; });
+      d.members.splice.apply(d.members, [d.index, 0].concat(rows));
       d.members.forEach(function (m, i) {
         place[m.id].col = d.col; place[m.id].row = i; });
-      place[lift.id].col = d.col;
       touch();
       relayout();
+      moved = true;
     }
     lift = null;
-    return true;
+    return moved;
   };
 
   // ---- the toolbar -----------------------------------------------------
@@ -1302,6 +1458,10 @@ EDITOR_JS = r"""
     }
   };
 
+  document.addEventListener('keydown', function (e) {
+    if (editing && e.key === 'Escape' && e.target.id !== 'find') clearSel();
+  });
+
   document.getElementById('revert').onclick = function () {
     cols = start.columns.slice();
     start.boxes.forEach(function (b) {
@@ -1350,6 +1510,9 @@ def render_html(g, title="deck connectivity", header=(), layout=None):
     <button id="addcol">+ column</button>
     <button id="delcol">- column</button>
     <button id="rencol">rename</button>
+    <button id="siblings" title="select every instance sharing this name stem: XIO_DQ0 picks up XIO_DQ1..7 (double-click a box does the same)">siblings</button>
+    <button id="selfound" title="select every instance the find box matches">select found</button>
+    <span id="selinfo"></span>
     <button id="save">save layout.json</button>
     <button id="copy">copy</button>
     <button id="revert">revert</button>
@@ -1359,7 +1522,8 @@ def render_html(g, title="deck connectivity", header=(), layout=None):
 </div>
 <div id="stage">
 %(svg)s
-<div id="hint">wheel: zoom &middot; drag: pan &middot; click: trace a net</div>
+<div id="hint">wheel: zoom &middot; drag: pan &middot; click: trace a net
+&middot; editing: shift+drag to box-select, double-click for siblings</div>
 </div>
 <script>window.DECK = %(state)s;</script>
 <script>%(js)s</script>

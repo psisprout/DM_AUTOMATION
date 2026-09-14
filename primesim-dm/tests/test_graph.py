@@ -113,6 +113,25 @@ XB a0 b0 sub
         self.assertEqual(g.dropped, 3)
         self.assertEqual(g.boxes[0].name, "XHUB")
 
+    def test_separate_parts_stack_instead_of_marching_right(self):
+        # an IO called out bit by bit is N identical unconnected parts; laid
+        # out left to right they make a picture nothing lines up in
+        body = ["* t"]
+        for i in range(4):
+            body.append("XIO_DQ%d  vdd pad%d txd%d sub" % (i, i, i))
+            body.append("XPKG_DQ%d ball%d pad%d pkg" % (i, i, i))
+        g = graph_mod.build(read_text(self.tmp, "\n".join(body) + "\n"))
+        graph_mod._measure(g)
+        graph_mod._layer(g)
+        cols = {}
+        for box in g.boxes:
+            cols.setdefault(box.layer // 2, []).append(box.name)
+        self.assertEqual(len(g.columns), 2, cols)
+        self.assertEqual(sorted(cols[0]),
+                         ["XIO_DQ0", "XIO_DQ1", "XIO_DQ2", "XIO_DQ3"])
+        self.assertEqual(sorted(cols[1]),
+                         ["XPKG_DQ0", "XPKG_DQ1", "XPKG_DQ2", "XPKG_DQ3"])
+
     def test_subckt_name_labels_the_box(self):
         dk = read_text(self.tmp, """* t
 XIO1 a b hbm_tx_drv
@@ -269,6 +288,16 @@ class HtmlTest(unittest.TestCase):
         self.assertIn("'mouseup'", html)
         # and the labels must not be selected instead of dragged
         self.assertIn("-moz-user-select: none", html)
+
+    def test_the_viewer_can_select_more_than_one_instance(self):
+        html = graph_mod.render_html(self.graph())
+        for control in ('id="siblings"', 'id="selfound"', 'id="band"',
+                        'id="selinfo"'):
+            self.assertIn(control, html)
+        # the stem rule instances are grouped by has to be the one the nets
+        # already use, or XIO_DQ0 and dq0 would disagree about what a bus is
+        self.assertIn("[<\\[(]?(\\d+)[>\\])]?$", html)
+        self.assertIn("__editorClick", html)
 
     def test_format_follows_the_output_extension(self):
         self.assertEqual(cli_mod._graph_format("deck.html"), "html")
