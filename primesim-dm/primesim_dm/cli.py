@@ -330,10 +330,16 @@ def cmd_graph(args):
 
     rails = () if args.no_rails else (
         list(graph_mod.DEFAULT_RAILS) + (args.rail or []))
+    fmt = args.format or _graph_format(args.output)
     g = graph_mod.build(dk, rails=rails, group_buses=not args.no_bus_groups,
                         max_elements=args.max_elements,
                         hide=args.hide or [], only=args.only or [],
-                        hide_names=(layout.hidden if layout else []))
+                        hide_names=(layout.hidden if layout else []),
+                        hide_nets=args.hide_net or [],
+                        hide_net_names=(layout.hidden_nets if layout else []),
+                        # the viewer can give hidden things back, so it is
+                        # handed them; a static picture is not
+                        keep_hidden=(fmt == "html"))
 
     # the picture is only as complete as the read that produced it, so it
     # says on its face what was left out - same reason lint prints a header
@@ -346,13 +352,18 @@ def cmd_graph(args):
                       % len(floating))
     if g.hidden:
         crossing = len([n for n in g.nets if n.crosses])
-        header.append("%d instance(s) hidden; %d net(s) reach them and are "
-                      "drawn dashed" % (g.hidden, crossing))
+        header.append("%d instance(s) hidden; %d net(s) still drawn reach "
+                      "them, dashed" % (g.hidden, crossing))
+    if g.hidden_nets:
+        note = "%d net(s) hidden" % g.hidden_nets
+        if g.hidden_nets_floating:
+            note += " - %d of those were one-sided" % g.hidden_nets_floating
+        header.append(note)
     if g.lost:
         # hiding is not free, and a finding that left the picture is worth
         # more than a tidy picture
-        note = ("%d net(s) not drawn at all: every instance on them is hidden"
-                % g.lost)
+        note = ("%d net(s) dropped with them: nothing drawn is left to "
+                "connect" % g.lost)
         if g.lost_floating:
             note += " - %d of those were one-sided" % g.lost_floating
         header.append(note)
@@ -366,7 +377,6 @@ def cmd_graph(args):
         header.append("%d least-connected element(s) not drawn (--max-elements)"
                       % g.dropped)
 
-    fmt = args.format or _graph_format(args.output)
     title = os.path.basename(args.deck[0])
     if fmt == "dot":
         text = graph_mod.render_dot(g)
@@ -538,6 +548,10 @@ def build_parser():
                         "out over the whole deck")
     s.add_argument("--only", action="append", metavar="REGEX",
                    help="draw only instances matching this (repeatable)")
+    s.add_argument("--hide-net", action="append", metavar="REGEX",
+                   help="leave nets matching this out of the picture - "
+                        "matched on the drawn label or any net behind it "
+                        "(repeatable)")
     s.add_argument("--layout", metavar="FILE",
                    help="column arrangement to draw with, as saved from the "
                         "html viewer. Missing file: the automatic layout is "

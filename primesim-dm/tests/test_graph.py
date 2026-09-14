@@ -164,18 +164,23 @@ XPKG_DQ1 ball1 pad1 pkg
     def graph(self, **kw):
         return graph_mod.build(read_text(self.tmp, self.DECK), **kw)
 
-    def test_hiding_does_not_invent_one_sided_nets(self):
-        # pad0 joins XIO to XPKG.  Hide XPKG and pad0 is still a wired net -
-        # calling it one-sided would be a false alarm from a tool whose whole
-        # job is telling true ones from false
-        full = {n.label: n.floating for n in self.graph().nets}
-        self.assertFalse(full["pad0"])
-        hidden = self.graph(hide=["^XPKG_"])
-        pad0 = [n for n in hidden.nets if n.label == "pad0"][0]
-        self.assertFalse(pad0.floating)
-        self.assertTrue(pad0.crosses)
-        self.assertEqual(pad0.hidden_ends, 1)
-        self.assertEqual(pad0.degree, 2)
+    def test_a_net_left_with_one_end_goes_with_it(self):
+        # pad0 joined XIO to XPKG.  Hide XPKG and pad0 shows no connection
+        # any more - it is a stub hanging off the one instance still drawn,
+        # so it goes too rather than crowding out what does say something
+        self.assertIn("pad0", [n.label for n in self.graph().nets])
+        self.assertNotIn("pad0", [n.label for n in
+                                  self.graph(hide=["^XPKG_"]).nets])
+
+    def test_hiding_never_marks_a_wired_net_one_sided(self):
+        # whatever leaves the picture, nothing left in it may be re-judged:
+        # a false alarm from a tool whose job is telling true ones from false
+        # would be worse than the clutter
+        before = sorted(n.label for n in self.graph().nets if n.floating)
+        after = sorted(n.label for n in self.graph(hide=["^XPKG_"]).nets
+                       if n.floating)
+        self.assertEqual(before, ["ball0", "ball1", "spare0", "spare1"])
+        self.assertEqual(after, ["spare0", "spare1"])
 
     def test_a_really_one_sided_net_stays_one_sided(self):
         g = self.graph(hide=["^XPKG_"])
@@ -188,8 +193,8 @@ XPKG_DQ1 ball1 pad1 pkg
         # one-sided nets off screen; that has to be said, not swallowed
         g = self.graph(hide=["^XPKG_"])
         self.assertEqual(g.hidden, 2)
-        self.assertEqual(g.lost, 2)
-        self.assertEqual(g.lost_floating, 2)
+        self.assertEqual(g.lost, 4)          # ball0, ball1, pad0, pad1
+        self.assertEqual(g.lost_floating, 2)  # only ball0/ball1 were findings
         self.assertEqual([n.label for n in g.nets if n.label.startswith("ball")],
                          [])
 
@@ -216,10 +221,23 @@ XPKG_DQ1 ball1 pad1 pkg
         for net in self.graph(hide=["^XPKG_"]).nets:
             self.assertIn(net.label, full)
 
-    def test_a_crossing_net_is_drawn_apart_from_a_floating_one(self):
-        svg = graph_mod.render_svg(self.graph(hide=["^XPKG_"]))
+    def test_a_net_that_still_connects_two_things_stays_and_says_so(self):
+        # three instances on one net: hide one and the net still shows a
+        # connection, so it stays - drawn dashed, never in the red of a
+        # finding, because it is wired and merely goes somewhere off screen
+        deck = read_text(self.tmp, """* t
+XA shared sub
+XB shared sub
+XC shared sub
+""", name="three.sp")
+        g = graph_mod.build(deck, hide=["XC"])
+        shared = [n for n in g.nets if n.label == "shared"][0]
+        self.assertFalse(shared.floating)
+        self.assertTrue(shared.crosses)
+        self.assertEqual(shared.hidden_ends, 1)
+        self.assertEqual(shared.degree, 3)
+        svg = graph_mod.render_svg(g)
         self.assertIn('class="cross"', svg)
-        self.assertIn('class="float"', svg)
         self.assertIn("also reaches 1 instance(s) not drawn", svg)
 
     def test_the_layout_file_remembers_what_was_hidden(self):
@@ -229,6 +247,50 @@ XPKG_DQ1 ball1 pad1 pkg
         self.assertEqual(lay.hidden, ["XPKG_DQ0"])
         g = self.graph(hide_names=lay.hidden)
         self.assertNotIn("XPKG_DQ0", [b.name for b in g.boxes])
+
+    def test_nets_can_be_hidden_on_their_own(self):
+        g = self.graph(hide_nets=["^spare"])
+        self.assertNotIn("spare0", [n.label for n in g.nets])
+        self.assertEqual(g.hidden_nets, 2)
+        # both were findings, and hiding a finding has to be said out loud
+        self.assertEqual(g.hidden_nets_floating, 2)
+
+    def test_hiding_a_net_leaves_the_instances_alone(self):
+        g = self.graph(hide_nets=["^pad"])
+        self.assertEqual(len(g.boxes), 4)
+
+    def test_hidden_net_names_are_literal(self):
+        g = self.graph(hide_net_names=["spare0"])
+        labels = [n.label for n in g.nets]
+        self.assertNotIn("spare0", labels)
+        self.assertIn("spare1", labels)
+
+    def test_the_viewer_keeps_what_it_hid_so_it_can_hand_it_back(self):
+        g = self.graph(hide=["^XPKG_"], keep_hidden=True)
+        self.assertEqual(sorted(b.name for b in g.gone_boxes),
+                         ["XPKG_DQ0", "XPKG_DQ1"])
+        # the nets that went with them are kept too, so the panel can say
+        # where they went and put them back
+        self.assertEqual(sorted(n.label for n in g.gone_nets),
+                         ["ball0", "ball1", "pad0", "pad1"])
+        svg = graph_mod.render_svg(g)
+        self.assertIn('data-name="XPKG_DQ0"', svg)
+        self.assertIn("box-node gone", svg)
+
+    def test_the_static_formats_really_drop_it(self):
+        g = self.graph(hide=["^XPKG_"])
+        self.assertEqual(g.gone_boxes, [])
+        self.assertEqual(g.gone_nets, [])
+        self.assertNotIn("XPKG_DQ0", graph_mod.render_svg(g))
+
+    def test_the_layout_file_remembers_hidden_nets_too(self):
+        text = graph_mod.dump_layout(graph_mod.Layout(
+            ["a"], {"XIO_DQ0": {"column": 0, "row": 0}},
+            hidden=["XPKG_DQ0"], hidden_nets=["spare0"]))
+        back = graph_mod.load_layout(text)
+        self.assertEqual(back.hidden, ["XPKG_DQ0"])
+        self.assertEqual(back.hidden_nets, ["spare0"])
+        self.assertEqual(graph_mod.dump_layout(back), text)
 
     def test_a_bad_hidden_list_is_refused(self):
         with self.assertRaises(graph_mod.LayoutError):
@@ -399,6 +461,16 @@ class HtmlTest(unittest.TestCase):
         self.assertIn('id="hide"', html)
         self.assertIn('id="showall"', html)
         self.assertIn("hiddenNames", html)
+
+    def test_the_viewer_lists_what_is_hidden(self):
+        html = graph_mod.render_html(self.graph())
+        self.assertIn('id="panel"', html)
+        self.assertIn('id="panelbody"', html)
+        self.assertIn('id="hidden"', html)
+        self.assertIn("dropped with them", html)
+        # nets are selectable and hideable, not only instances
+        self.assertIn("selNetIds", html)
+        self.assertIn("hidden_nets", html)
 
     def test_the_viewer_can_select_more_than_one_instance(self):
         html = graph_mod.render_html(self.graph())

@@ -66,6 +66,7 @@ class Box(object):
     """One element of the deck, drawn as a rectangle."""
 
     hidden = False
+    dropped = False           # past --max-elements, not a choice of anyone's
 
     def __init__(self, el):
         self.el = el
@@ -88,6 +89,9 @@ class Box(object):
 
 class NetNode(object):
     """A net, or a bus of nets wired the same way, drawn as a pill."""
+
+    hidden = False            # taken out of the picture on purpose
+    orphan = False            # nothing left that it touches is drawn
 
     def __init__(self, label, nets, boxes, width, degree=None,
                  hidden_ends=0):
@@ -128,6 +132,14 @@ class Graph(object):
         self.hidden = 0           # instances left out of the picture
         self.lost = 0             # net nodes no visible instance touches
         self.lost_floating = 0    # ... of those, ones that were one-sided
+        self.hidden_nets = 0      # nets hidden on purpose
+        self.hidden_nets_floating = 0
+        # In the html viewer nothing is thrown away: what is hidden is still
+        # in the page, drawn as gone, so the page can give it back.  The
+        # static formats really do drop it - a picture for a report should
+        # not carry what was taken out of it.
+        self.gone_boxes = []
+        self.gone_nets = []
         self.columns = []         # names of the element columns, left to right
         self.unplaced = 0         # boxes no layout file spoke for
         self.geom = {"x": {}, "width": {}}   # per-column x and width
@@ -148,13 +160,29 @@ def _box_filter(patterns):
     return match
 
 
+def _net_filter(patterns):
+    """Match a net node by its label or by any net collapsed into it."""
+    rx = [re.compile(p, re.I) for p in patterns]
+
+    def match(node):
+        for hay in [node.label] + list(node.nets):
+            if any(r.search(hay) for r in rx):
+                return True
+        return False
+    return match
+
+
 def build(deck, rails=DEFAULT_RAILS, group_buses=True, max_elements=80,
-          hide=(), only=(), hide_names=()):
+          hide=(), only=(), hide_names=(), hide_nets=(), hide_net_names=(),
+          keep_hidden=False):
     """Turn a parsed :class:`deck.Deck` into a drawable graph.
 
-    ``hide`` / ``only`` / ``hide_names`` take instances out of the *picture*.
+    The hide arguments take instances and nets out of the *picture*.
     Connectivity is still worked out over the whole deck, so what is left
     tells the truth about what was hidden rather than about itself.
+
+    With ``keep_hidden`` what was hidden is kept in the graph, marked, so the
+    html viewer can hand it back; the static formats drop it for real.
     """
     g = Graph()
     is_rail = _rail_filter(rails) if rails else (lambda net: False)
@@ -175,7 +203,6 @@ def build(deck, rails=DEFAULT_RAILS, group_buses=True, max_elements=80,
             box.hidden = True
         elif drop is not None and drop(box):
             box.hidden = True
-    g.hidden = sum(1 for b in boxes if b.hidden)
 
     # net -> every box that touches it, hidden ones included: the picture is
     # allowed to leave things out, the connectivity behind it is not
@@ -195,18 +222,18 @@ def build(deck, rails=DEFAULT_RAILS, group_buses=True, max_elements=80,
             continue
         touch[net] = on
 
-    visible = [b for b in boxes if not b.hidden]
-    if max_elements and len(visible) > max_elements:
-        # keep the most-connected ones: a hub tells you more than a leaf
+    live = [b for b in boxes if not b.hidden]
+    if max_elements and len(live) > max_elements:
+        # a size guard, not a choice: keep the most-connected ones, since a
+        # hub tells you more than a leaf
         degree = {}
-        for box in visible:
+        for box in live:
             degree[id(box)] = len([n for n in box.el.nodes if not is_rail(n)])
-        visible.sort(key=lambda b: -degree[id(b)])
-        for box in visible[max_elements:]:
+        live.sort(key=lambda b: -degree[id(b)])
+        for box in live[max_elements:]:
             box.hidden = True
-        g.dropped = len(visible) - max_elements
-        visible = visible[:max_elements]
-    g.boxes = [b for b in boxes if not b.hidden]
+            box.dropped = True
+        g.dropped = len(live) - max_elements
 
     # collapse buses: same stem, same endpoints, and more than one member.
     # Endpoints here are the real ones, so two nets wired alike still group
@@ -217,26 +244,54 @@ def build(deck, rails=DEFAULT_RAILS, group_buses=True, max_elements=80,
         key = (stem, idx is None, tuple(sorted(id(b) for b in on)))
         groups.setdefault(key, []).append((net, idx, on))
 
+    drop_net = _net_filter(hide_nets) if hide_nets else None
+    net_names = set(hide_net_names or ())
+
+    nodes = []
     for (stem, plain, _sig), members in groups.items():
         nets = [m[0] for m in members]
         on = members[0][2]
-        shown = [b for b in on if not b.hidden]
-        if not shown:
-            # Every instance on this net is hidden, so it cannot be drawn at
-            # all.  Hiding is never free: a one-sided net that disappears
-            # this way is a real finding leaving the picture, and the header
-            # says how many did.
-            g.lost += 1
-            if len(on) < 2:
-                g.lost_floating += 1
-            continue
         if plain or len(members) == 1:
             label = nets[0] if len(nets) == 1 else "%s x%d" % (stem, len(nets))
         else:
             label = "%s[%s]" % (stem, _ranges(m[1] for m in members))
-        g.nets.append(NetNode(label, sorted(nets), shown, len(nets),
-                              degree=len(on),
-                              hidden_ends=len(on) - len(shown)))
+        shown = [b for b in on if not b.hidden]
+        node = NetNode(label, sorted(nets), shown, len(nets),
+                       degree=len(on), hidden_ends=len(on) - len(shown))
+        node.all_boxes = on
+        nodes.append(node)
+
+    for node in nodes:
+        if node.label in net_names or any(n in net_names for n in node.nets):
+            node.hidden = True
+        elif drop_net is not None and drop_net(node):
+            node.hidden = True
+
+        if node.hidden:
+            g.hidden_nets += 1
+            if node.degree < 2:
+                g.hidden_nets_floating += 1
+            continue
+
+        # A net earns its place by showing a connection.  Hide the source
+        # that drove a_dq0 and what is left is a stub hanging off the one
+        # instance still on screen - it says nothing and crowds out what
+        # does, so it goes too.  The exception is a net that was already
+        # one-sided in the deck: that is not a stub, that is the finding.
+        need = 1 if node.degree < 2 else 2
+        if len(node.boxes) < need:
+            node.orphan = True
+            g.lost += 1
+            if node.degree < 2:
+                g.lost_floating += 1
+
+    g.boxes = [b for b in boxes if not b.hidden]
+    g.nets = [n for n in nodes if not (n.hidden or n.orphan)]
+    g.hidden = sum(1 for b in boxes if b.hidden and not getattr(b, "dropped", False))
+    if keep_hidden:
+        g.gone_boxes = [b for b in boxes
+                        if b.hidden and not getattr(b, "dropped", False)]
+        g.gone_nets = [n for n in nodes if n.hidden or n.orphan]
 
     for box in g.boxes:
         box.rails.sort()
@@ -257,10 +312,12 @@ class Layout(object):
 
     VERSION = 1
 
-    def __init__(self, columns=None, elements=None, hidden=None):
+    def __init__(self, columns=None, elements=None, hidden=None,
+                 hidden_nets=None):
         self.columns = list(columns or [])      # column names, left to right
         self.elements = dict(elements or {})    # element name -> {column,row}
         self.hidden = list(hidden or [])        # instances left out on purpose
+        self.hidden_nets = list(hidden_nets or [])
 
     def column_of(self, name):
         spec = self.elements.get(name)
@@ -270,6 +327,7 @@ class Layout(object):
         return {"version": self.VERSION,
                 "columns": [{"name": n} for n in self.columns],
                 "hidden": sorted(self.hidden),
+                "hidden_nets": sorted(self.hidden_nets),
                 # rows are written as whole numbers so that reading a file
                 # and writing it back leaves it byte for byte the same - a
                 # layout file lives in version control
@@ -321,11 +379,14 @@ def load_layout(text, where="layout"):
                               (where, name, col, len(names)))
         elements[name] = {"column": col, "row": row}
 
-    hidden = raw.get("hidden") or []
-    if not isinstance(hidden, list):
-        raise LayoutError("%s: 'hidden' should be a list of instance names"
-                          % where)
-    return Layout(names, elements, [str(h) for h in hidden])
+    lists = {}
+    for key in ("hidden", "hidden_nets"):
+        got = raw.get(key) or []
+        if not isinstance(got, list):
+            raise LayoutError("%s: '%s' should be a list of names"
+                              % (where, key))
+        lists[key] = [str(h) for h in got]
+    return Layout(names, elements, lists["hidden"], lists["hidden_nets"])
 
 
 def dump_layout(layout):
@@ -347,7 +408,9 @@ def _layer_from_layout(g, layout):
     ncols = len(layout.columns)
     g.columns = list(layout.columns)
     unplaced = []
-    for box in g.boxes:
+    # hidden boxes are laid out too: the viewer needs somewhere to put one
+    # back to, and the column it was in is the only answer anyone expects
+    for box in g.boxes + g.gone_boxes:
         spec = layout.elements.get(box.name)
         if spec is None:
             unplaced.append(box)
@@ -365,8 +428,9 @@ def _layer_from_layout(g, layout):
             box.order = i
     g.unplaced = len(unplaced)
 
-    for net in g.nets:
-        net.layer = (min(b.layer for b in net.boxes) + 1) if net.boxes else 1
+    for net in g.nets + g.gone_nets:
+        ends = net.boxes or getattr(net, "all_boxes", [])
+        net.layer = (min(b.layer for b in ends) + 1) if ends else 1
 
 
 def _layer(g):
@@ -481,12 +545,12 @@ def _esc(text):
 
 
 def _measure(g):
-    for box in g.boxes:
+    for box in g.boxes + g.gone_boxes:
         widest = max(len(box.name), len(box.sub_label),
                      len(", ".join(box.rails)) + 2 if box.rails else 0)
         box.w = max(112, widest * CHAR_W + BOX_PAD * 2)
         box.h = 54 if box.rails else 40
-    for net in g.nets:
+    for net in g.nets + g.gone_nets:
         label = net.label
         if net.width > 1:
             label += "  x%d" % net.width
@@ -622,10 +686,17 @@ def render_svg(g, title="deck connectivity", header=(), embed_header=True,
     g.geom["top"] = top
     for node in g.boxes + g.nets:
         node.y += top
+    # what is hidden was never placed; it sits at the origin, which is where
+    # the viewer's transforms measure from when it puts one back
+    for node in g.gone_boxes + g.gone_nets:
+        node.x = node.y = 0
 
-    # ids let the HTML viewer light up one net and everything on it
-    bid = {id(b): "b%d" % i for i, b in enumerate(g.boxes)}
-    nid = {id(n): "n%d" % i for i, n in enumerate(g.nets)}
+    # ids let the HTML viewer light up one net and everything on it - and
+    # hidden nodes are in the page too, so it can give them back
+    all_boxes = g.boxes + g.gone_boxes
+    all_nets = g.nets + g.gone_nets
+    bid = {id(b): "b%d" % i for i, b in enumerate(all_boxes)}
+    nid = {id(n): "n%d" % i for i, n in enumerate(all_nets)}
 
     out.append('<g id="scene">')
     out.append('<g id="colheads"></g><g id="dropzones"></g>'
@@ -642,21 +713,26 @@ def render_svg(g, title="deck connectivity", header=(), embed_header=True,
                        'text-anchor="middle">%s</text>'
                        % (cx, top + 18, _esc(name)))
 
-    # wires first, so the boxes sit on top of them
-    for net in g.nets:
+    # wires first, so the boxes sit on top of them.  Every endpoint gets one,
+    # hidden ones marked, so nothing has to be invented when one comes back.
+    for net in all_nets:
         if net.floating:
             cls = "floatwire"
         elif net.crosses:
             cls = "crosswire"
         else:
             cls = "bus" if net.width > 1 else "wire"
-        for box in net.boxes:
+        for box in getattr(net, "all_boxes", net.boxes):
+            if id(box) not in bid:
+                continue
+            gone = (net.hidden or net.orphan or box.hidden) and " gone" or ""
             x1, y1, x2, y2 = _edge(net, box)
-            out.append('<path class="%s wire-of" data-net="%s" data-box="%s" '
-                       'd="M %.1f %.1f L %.1f %.1f"/>'
-                       % (cls, nid[id(net)], bid[id(box)], x1, y1, x2, y2))
+            out.append('<path class="%s wire-of%s" data-net="%s" '
+                       'data-box="%s" d="M %.1f %.1f L %.1f %.1f"/>'
+                       % (cls, gone, nid[id(net)], bid[id(box)],
+                          x1, y1, x2, y2))
 
-    for net in g.nets:
+    for net in all_nets:
         label = net.label + ("  x%d" % net.width if net.width > 1 else "")
         if net.floating:
             cls, lcls = "float", "floatl"
@@ -665,8 +741,11 @@ def render_svg(g, title="deck connectivity", header=(), embed_header=True,
             label += "  \u2192"          # it carries on somewhere not drawn
         else:
             cls, lcls = "net", "netl"
-        out.append('<g class="node net-node" id="%s" data-search="%s">'
-                   % (nid[id(net)], _esc(" ".join([net.label] + net.nets))))
+        out.append('<g class="node net-node%s" id="%s" data-label="%s" '
+                   'data-search="%s">'
+                   % (" gone" if (net.hidden or net.orphan) else "",
+                      nid[id(net)], _esc(net.label),
+                      _esc(" ".join([net.label] + net.nets))))
         out.append('<rect class="%s" x="%.1f" y="%.1f" width="%.1f" '
                    'height="%.1f" rx="11"/>'
                    % (cls, net.x, net.y, net.w, net.h))
@@ -682,10 +761,11 @@ def render_svg(g, title="deck connectivity", header=(), embed_header=True,
         out.append("<title>%s</title>" % _esc(", ".join(net.nets) + note))
         out.append("</g>")
 
-    for box in g.boxes:
-        out.append('<g class="node box-node" id="%s" data-name="%s" '
+    for box in all_boxes:
+        out.append('<g class="node box-node%s" id="%s" data-name="%s" '
                    'data-search="%s">'
-                   % (bid[id(box)], _esc(box.name),
+                   % (" gone" if box.hidden else "",
+                      bid[id(box)], _esc(box.name),
                       _esc(" ".join([box.name, box.sub_label]))))
         out.append('<rect class="box" x="%.1f" y="%.1f" width="%.1f" '
                    'height="%.1f" rx="4"/>' % (box.x, box.y, box.w, box.h))
@@ -717,16 +797,20 @@ def viewer_state(g):
     two placements have to follow the same rule.
     """
     boxes = []
-    for i, box in enumerate(g.boxes):
+    for i, box in enumerate(g.boxes + g.gone_boxes):
         boxes.append({"id": "b%d" % i, "name": box.name,
+                      "sub": box.sub_label, "hidden": bool(box.hidden),
                       "col": int(box.layer // 2), "row": float(box.order),
                       "x": round(box.x, 2), "y": round(box.y, 2),
                       "w": round(box.w, 2), "h": round(box.h, 2)})
-    bid = {id(b): "b%d" % i for i, b in enumerate(g.boxes)}
+    bid = {id(b): "b%d" % i for i, b in enumerate(g.boxes + g.gone_boxes)}
     nets = []
-    for j, net in enumerate(g.nets):
+    for j, net in enumerate(g.nets + g.gone_nets):
         nets.append({"id": "n%d" % j, "label": net.label,
-                     "boxes": [bid[id(b)] for b in net.boxes],
+                     "hidden": bool(net.hidden), "degree": net.degree,
+                     "boxes": [bid[id(b)] for b in
+                               getattr(net, "all_boxes", net.boxes)
+                               if id(b) in bid],
                      "x": round(net.x, 2), "y": round(net.y, 2),
                      "w": round(net.w, 2), "h": round(net.h, 2)})
     return {"columns": list(g.columns), "boxes": boxes, "nets": nets,
@@ -833,6 +917,32 @@ body.editing #scene .node.lift { cursor: grabbing; opacity: 0.85; }
 #selinfo { color: #2f6fb5; }
 #hideinfo { color: #b06a00; }
 #scene .gone { display: none; }
+#panel {
+  position: absolute; top: 8px; right: 8px; width: 260px; max-height: 82%;
+  display: none; flex-direction: column; background: #ffffff;
+  border: 1px solid #b6c0cd; border-radius: 6px; overflow: hidden;
+  box-shadow: 0 4px 16px rgba(20,30,45,0.14);
+}
+#panel.on { display: flex; }
+#panelhead {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  border-bottom: 1px solid #e2e7ee; font-weight: 600;
+}
+#panelhead button { padding: 1px 6px; }
+#panelbody { overflow-y: auto; padding: 4px 0 8px; }
+#panelbody h4 {
+  margin: 8px 8px 4px; font-size: 11px; font-weight: 600; color: #5c6b80;
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+#panelbody .row {
+  display: flex; align-items: baseline; gap: 6px; padding: 3px 10px;
+  cursor: pointer;
+}
+#panelbody .row:hover { background: #e9eff6; }
+#panelbody .row .why { color: #8794a6; font-size: 11px; margin-left: auto; }
+#panelbody .row.auto { cursor: default; opacity: 0.75; }
+#panelbody .row.auto:hover { background: none; }
+#panelbody .none { padding: 3px 10px; color: #8794a6; }
 #scene .node.crossed rect { stroke: #8a93a0; stroke-dasharray: 5 3; }
 @media (prefers-color-scheme: dark) {
   #edit.on { background: #24405e; border-color: #5b86bd; }
@@ -845,6 +955,12 @@ body.editing #scene .node.lift { cursor: grabbing; opacity: 0.85; }
   #selinfo { color: #8fb4d9; }
   #hideinfo { color: #e0a952; }
   #scene .node.crossed rect { stroke: #7d8795; }
+  #panel { background: #171d25; border-color: #3d4957;
+           box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
+  #panelhead { border-bottom-color: #2b3541; }
+  #panelbody h4 { color: #93a3b8; }
+  #panelbody .row:hover { background: #212b37; }
+  #panelbody .row .why, #panelbody .none { color: #7f8fa4; }
 }
 @media (prefers-color-scheme: dark) {
   body { background: #12161c; color: #e8edf4; }
@@ -1096,7 +1212,9 @@ EDITOR_JS = r"""
         return { id: b.id, col: b.col, row: b.row }; }) }));
   var cols = D.columns.slice();
   var place = {};                       // box id -> {col, row}
-  D.boxes.forEach(function (b) { place[b.id] = { col: b.col, row: b.row }; });
+  D.boxes.forEach(function (b) {
+    place[b.id] = { col: b.col || 0, row: b.row || 0 };
+  });
   var byId = {}, cur = -1, editing = false, changed = false;
   D.boxes.concat(D.nets).forEach(function (n) { byId[n.id] = n; });
 
@@ -1158,8 +1276,9 @@ EDITOR_JS = r"""
       (layers[lay] = layers[lay] || []).push(b);
     });
     D.nets.forEach(function (n) {
+      var st = netState(n);
+      if (st === 'hidden' || st === 'orphan') return;
       var shown = n.boxes.filter(function (id) { return !hid[id]; });
-      if (n.boxes.length && !shown.length) return;
       var lay = shown.length
         ? Math.min.apply(null, shown.map(function (id) {
             return place[id].col * 2; })) + 1
@@ -1278,11 +1397,27 @@ EDITOR_JS = r"""
 
   // ---- hiding ----------------------------------------------------------
   // Hiding tidies the picture; it must never tidy away a finding silently.
-  // Nets stay classed as the generator found them - one-sided is decided on
-  // the whole deck - and anything that drops out entirely is counted and
-  // said out loud.
-  var hid = {};
+  // Whether a net is one-sided was decided over the whole deck before the
+  // page was written, so nothing here can re-judge it.  What this does
+  // decide is whether a net still shows anything: with the instance that
+  // drove it hidden, a_dq0 is a stub off the one box still drawn, and the
+  // stub goes too.  A net that was already one-sided is not a stub - that
+  // is the finding, and it stays.
+  var hid = {}, hidNet = {};
   var hideinfo = document.getElementById('hideinfo');
+  var panel = document.getElementById('panel');
+  var panelBody = document.getElementById('panelbody');
+
+  D.boxes.forEach(function (b) { if (b.hidden) hid[b.id] = 'file'; });
+  D.nets.forEach(function (n) { if (n.hidden) hidNet[n.id] = 'file'; });
+
+  function netState(n) {
+    if (hidNet[n.id]) return 'hidden';
+    var shown = n.boxes.filter(function (id) { return !hid[id]; });
+    var need = n.degree < 2 ? 1 : 2;
+    if (shown.length < need) return 'orphan';
+    return shown.length < n.boxes.length ? 'crossed' : 'on';
+  }
 
   function applyHidden() {
     var lost = 0, lostRed = 0, crossing = 0;
@@ -1293,51 +1428,129 @@ EDITOR_JS = r"""
     D.nets.forEach(function (n) {
       var el = document.getElementById(n.id);
       if (!el) return;
-      var shown = n.boxes.filter(function (id) { return !hid[id]; });
-      var red = !!el.querySelector('.float');
-      if (!shown.length) {
-        el.classList.add('gone');
+      var st = netState(n);
+      el.classList.toggle('gone', st === 'hidden' || st === 'orphan');
+      el.classList.toggle('crossed', st === 'crossed');
+      if (st === 'orphan') {
         lost += 1;
-        if (red) lostRed += 1;
-      } else {
-        el.classList.remove('gone');
-        var crossed = shown.length < n.boxes.length;
-        el.classList.toggle('crossed', crossed && !red);
-        if (crossed) crossing += 1;
+        if (n.degree < 2) lostRed += 1;
+      } else if (st === 'crossed') {
+        crossing += 1;
       }
     });
     [].forEach.call(scene.querySelectorAll('.wire-of'), function (w) {
+      var net = document.getElementById(w.getAttribute('data-net'));
       var gone = hid[w.getAttribute('data-box')] ||
-                 document.getElementById(w.getAttribute('data-net'))
-                         .classList.contains('gone');
+                 (net && net.classList.contains('gone'));
       w.classList.toggle('gone', !!gone);
     });
 
-    var n = Object.keys(hid).length + (D.hiddenNames || []).length;
+    var nb = 0, nn = 0, nnRed = 0;
+    D.boxes.forEach(function (b) { if (hid[b.id]) nb += 1; });
+    D.nets.forEach(function (n) {
+      if (!hidNet[n.id]) return;
+      nn += 1;
+      if (n.degree < 2) nnRed += 1;      // a finding, hidden on purpose
+    });
     var bits = [];
-    if (n) bits.push(n + ' hidden');
+    if (nb) bits.push(nb + ' instance(s) hidden');
+    if (nn) {
+      bits.push(nn + ' net(s) hidden' +
+                (nnRed ? ' (' + nnRed + ' one-sided!)' : ''));
+    }
     if (crossing) bits.push(crossing + ' net(s) dashed');
     if (lost) {
-      bits.push(lost + ' net(s) dropped' +
+      bits.push(lost + ' net(s) dropped with them' +
                 (lostRed ? ' (' + lostRed + ' one-sided!)' : ''));
     }
-    hideinfo.textContent = bits.join(' \u00b7 ');
+    hideinfo.textContent = bits.join(' · ');
+    if (panel.classList.contains('on')) drawPanel();
   }
 
-  document.getElementById('hide').onclick = function () {
-    var ids = selIds();
-    if (!ids.length) { alert('select the instances to hide first'); return; }
-    ids.forEach(function (id) { hid[id] = true; });
+  function hideSelection() {
+    var n = 0;
+    selIds().forEach(function (id) { hid[id] = 'you'; n += 1; });
+    selNetIds().forEach(function (id) { hidNet[id] = 'you'; n += 1; });
+    if (!n) { alert('select what to hide first'); return; }
     clearSel();
     touch();
     relayout();
-  };
+  }
 
-  document.getElementById('showall').onclick = function () {
-    hid = {};
-    if ((D.hiddenNames || []).length) { D.hiddenNames = []; }
+  function showAll() {
+    hid = {}; hidNet = {};
     touch();
     relayout();
+  }
+
+  // ---- the list of what is hidden, so any of it can come back ----------
+  function drawPanel() {
+    panelBody.textContent = '';
+
+    function section(title, rows) {
+      var h = document.createElement('h4');
+      h.textContent = title + ' (' + rows.length + ')';
+      panelBody.appendChild(h);
+      if (!rows.length) {
+        var none = document.createElement('div');
+        none.className = 'none';
+        none.textContent = 'nothing';
+        panelBody.appendChild(none);
+        return;
+      }
+      rows.forEach(function (r) {
+        var row = document.createElement('div');
+        row.className = 'row' + (r.restore ? '' : ' auto');
+        var name = document.createElement('span');
+        name.textContent = r.label;
+        row.appendChild(name);
+        if (r.why) {
+          var why = document.createElement('span');
+          why.className = 'why';
+          why.textContent = r.why;
+          row.appendChild(why);
+        }
+        if (r.restore) {
+          row.title = 'click to put it back';
+          row.onclick = r.restore;
+        }
+        panelBody.appendChild(row);
+      });
+    }
+
+    section('instances', D.boxes.filter(function (b) { return hid[b.id]; })
+      .map(function (b) {
+        return { label: b.name, why: b.sub,
+                 restore: function () { delete hid[b.id]; touch(); relayout(); } };
+      }));
+
+    section('nets', D.nets.filter(function (n) { return hidNet[n.id]; })
+      .map(function (n) {
+        return { label: n.label,
+                 why: n.degree < 2 ? 'was one-sided!' : '',
+                 restore: function () { delete hidNet[n.id]; touch(); relayout(); } };
+      }));
+
+    // Not hidden by anyone - these went because everything they touch did.
+    // Listed because "where did that net go" is the first thing asked, and
+    // a one-sided one leaving the picture is a finding leaving with it.
+    section('dropped with them', D.nets.filter(function (n) {
+      return !hidNet[n.id] && netState(n) === 'orphan';
+    }).map(function (n) {
+      return { label: n.label,
+               why: n.degree < 2 ? 'was one-sided!' : 'left with one end' };
+    }));
+  }
+
+  document.getElementById('hide').onclick = hideSelection;
+  document.getElementById('showall').onclick = showAll;
+  document.getElementById('panelall').onclick = showAll;
+  document.getElementById('panelclose').onclick = function () {
+    panel.classList.remove('on');
+  };
+  document.getElementById('hidden').onclick = function () {
+    panel.classList.toggle('on');
+    if (panel.classList.contains('on')) drawPanel();
   };
 
   // ---- selection -------------------------------------------------------
@@ -1345,7 +1558,7 @@ EDITOR_JS = r"""
   // column, and dragging them one at a time is not a feature.  The stem rule
   // is the one the nets already use: XIO_DQ0..7 share a stem, so one of them
   // can pick up the rest.
-  var sel = {};
+  var sel = {}, selNet = {};
   var band = document.getElementById('band');
   var selinfo = document.getElementById('selinfo');
 
@@ -1359,43 +1572,68 @@ EDITOR_JS = r"""
                   .map(function (b) { return b.id; });
   }
 
+  function selNetIds() {
+    return D.nets.filter(function (n) { return selNet[n.id]; })
+                 .map(function (n) { return n.id; });
+  }
+
+  function isNet(id) { return id.charAt(0) === 'n'; }
+
   function paintSel() {
     D.boxes.forEach(function (b) {
       var el = document.getElementById(b.id);
       if (el) el.classList.toggle('sel', !!sel[b.id]);
     });
-    var n = selIds().length;
-    selinfo.textContent = n ? n + ' selected' : '';
+    D.nets.forEach(function (n) {
+      var el = document.getElementById(n.id);
+      if (el) el.classList.toggle('sel', !!selNet[n.id]);
+    });
+    var nb = selIds().length, nn = selNetIds().length;
+    var bits = [];
+    if (nb) bits.push(nb + ' instance(s)');
+    if (nn) bits.push(nn + ' net(s)');
+    selinfo.textContent = bits.length ? bits.join(' + ') + ' selected' : '';
   }
 
   function setSel(ids) {
-    sel = {};
-    ids.forEach(function (id) { sel[id] = true; });
-    paintSel();
+    sel = {}; selNet = {};
+    addSel(ids);
   }
 
   function addSel(ids) {
-    ids.forEach(function (id) { sel[id] = true; });
+    ids.forEach(function (id) {
+      if (isNet(id)) selNet[id] = true; else sel[id] = true;
+    });
     paintSel();
   }
 
-  function clearSel() { sel = {}; paintSel(); }
+  function clearSel() { sel = {}; selNet = {}; paintSel(); }
 
   function siblingsOf(ids) {
-    var stems = {};
+    var stems = {}, wantNet = false, wantBox = false;
     ids.forEach(function (id) {
-      var b = byId[id];
-      if (b) stems[stemOf(b.name)] = 1;
+      var n = byId[id];
+      if (!n) return;
+      if (isNet(id)) { wantNet = true; stems[stemOf(n.label)] = 1; }
+      else { wantBox = true; stems[stemOf(n.name)] = 1; }
     });
-    return D.boxes.filter(function (b) { return stems[stemOf(b.name)]; })
-                  .map(function (b) { return b.id; });
+    var out = [];
+    if (wantBox) {
+      D.boxes.forEach(function (b) {
+        if (stems[stemOf(b.name)]) out.push(b.id); });
+    }
+    if (wantNet) {
+      D.nets.forEach(function (n) {
+        if (stems[stemOf(n.label)]) out.push(n.id); });
+    }
+    return out;
   }
 
   window.__editorClick = function (node, e) {
     if (!editing) return false;
-    if (!node.classList.contains('box-node')) return false;   // nets: trace
+    var bag = isNet(node.id) ? selNet : sel;
     if (e.ctrlKey || e.metaKey || e.shiftKey) {
-      if (sel[node.id]) { delete sel[node.id]; paintSel(); }
+      if (bag[node.id]) { delete bag[node.id]; paintSel(); }
       else { addSel([node.id]); }
     } else if (e.detail >= 2) {
       setSel(siblingsOf([node.id]));
@@ -1420,11 +1658,13 @@ EDITOR_JS = r"""
   document.getElementById('selfound').onclick = function () {
     var q = (document.getElementById('find').value || '').trim().toLowerCase();
     if (!q) { alert('type something in the find box first'); return; }
-    setSel(D.boxes.filter(function (b) {
-      var el = document.getElementById(b.id);
-      var hay = (el && el.getAttribute('data-search')) || b.name;
-      return hay.toLowerCase().indexOf(q) >= 0;
-    }).map(function (b) { return b.id; }));
+    var hit = [];
+    D.boxes.concat(D.nets).forEach(function (n) {
+      var el = document.getElementById(n.id);
+      var hay = (el && el.getAttribute('data-search')) || n.name || n.label;
+      if (hay.toLowerCase().indexOf(q) >= 0) hit.push(n.id);
+    });
+    setSel(hit);
   };
 
   // ---- dragging the selection into a column ----------------------------
@@ -1523,10 +1763,11 @@ EDITOR_JS = r"""
       band.style.display = 'none';
       lift = null;
       if (bw < 3 && bh < 3) return false;     // a shift-click, not a sweep
-      setSel(D.boxes.filter(function (b) {
-        return b.nx < bx + bw && b.nx + b.w > bx &&
-               b.ny < by + bh && b.ny + b.h > by;
-      }).map(function (b) { return b.id; }));
+      setSel(D.boxes.concat(D.nets).filter(function (n) {
+        if (n.nx === undefined) return false;
+        return n.nx < bx + bw && n.nx + n.w > bx &&
+               n.ny < by + bh && n.ny + n.h > by;
+      }).map(function (n) { return n.id; }));
       return true;
     }
 
@@ -1603,16 +1844,14 @@ EDITOR_JS = r"""
         elements[b.name] = { column: place[b.id].col,
                              row: Math.round(place[b.id].row) };
       });
-    var hiddenNames = (D.hiddenNames || []).slice();
-    D.boxes.forEach(function (b) {
-      if (hid[b.id] && hiddenNames.indexOf(b.name) < 0) {
-        hiddenNames.push(b.name);
-      }
-    });
+    var hiddenNames = [], hiddenNets = [];
+    D.boxes.forEach(function (b) { if (hid[b.id]) hiddenNames.push(b.name); });
+    D.nets.forEach(function (n) { if (hidNet[n.id]) hiddenNets.push(n.label); });
     return JSON.stringify({
       version: 1,
       columns: cols.map(function (n) { return { name: n }; }),
       hidden: hiddenNames.sort(),
+      hidden_nets: hiddenNets.sort(),
       elements: elements
     }, null, 2) + '\n';
   }
@@ -1651,7 +1890,9 @@ EDITOR_JS = r"""
   });
 
   document.getElementById('revert').onclick = function () {
-    hid = {};
+    hid = {}; hidNet = {};
+    D.boxes.forEach(function (b) { if (b.hidden) hid[b.id] = 'file'; });
+    D.nets.forEach(function (n) { if (n.hidden) hidNet[n.id] = 'file'; });
     cols = start.columns.slice();
     start.boxes.forEach(function (b) {
       place[b.id] = { col: b.col, row: b.row }; });
@@ -1705,7 +1946,8 @@ def render_html(g, title="deck connectivity", header=(), layout=None):
     <button id="siblings" title="select every instance sharing this name stem: XIO_DQ0 picks up XIO_DQ1..7 (double-click a box does the same)">siblings</button>
     <button id="selfound" title="select every instance the find box matches">select found</button>
     <button id="hide" title="take the selected instances out of the picture (not out of the deck)">hide</button>
-    <button id="showall" title="bring hidden instances back">show all</button>
+    <button id="hidden" title="list what is hidden and put back the ones you want">hidden\u2026</button>
+    <button id="showall" title="bring everything hidden back">show all</button>
     <button id="save">save layout.json</button>
     <button id="copy">copy</button>
     <button id="revert">revert</button>
@@ -1719,6 +1961,14 @@ def render_html(g, title="deck connectivity", header=(), layout=None):
 </div>
 <div id="stage">
 %(svg)s
+<div id="panel">
+  <div id="panelhead">
+    <span>hidden</span>
+    <button id="panelall">show all</button>
+    <button id="panelclose">close</button>
+  </div>
+  <div id="panelbody"></div>
+</div>
 <div id="hint">wheel: zoom &middot; drag: pan &middot; click: trace a net
 &middot; editing: shift+drag to box-select, double-click for siblings</div>
 </div>
