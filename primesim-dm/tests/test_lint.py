@@ -655,3 +655,113 @@ XIO_0  pad0 zz_first aa_second mid0 io
         first = [l for l in text.splitlines() if l.startswith("Rterm_")][0]
         self.assertTrue(first.startswith("Rterm_1 "))
         self.assertIn("zz_late", first)
+
+
+class TestReferenceFiles(Harness):
+    """Is the deck simulating with the pattern and options it should be?
+
+    Matched on content, never on path: the same file copied somewhere else
+    under another name is still the same file, and that is the whole point
+    of the check.
+    """
+
+    PATTERN = "* pattern\n.param tpat=1n\nVPAT pat 0 PWL 0 0 1n 1.1\n"
+    OPTIONS = ".option post=2 accurate\n.temp 25\n"
+
+    def deck_with(self, *includes):
+        lines = ["* d"]
+        for inc in includes:
+            lines.append(".include '%s'" % inc)
+        lines.append("XA a b sub")
+        lines.append(".end")
+        return "\n".join(lines) + "\n"
+
+    def run_with(self, deck_text, patterns=(), options=(), **kw):
+        from primesim_dm import check as check_mod
+        old = (check_mod.REFERENCE_PATTERN_FILES,
+               check_mod.REFERENCE_OPTION_FILES)
+        check_mod.REFERENCE_PATTERN_FILES = list(patterns)
+        check_mod.REFERENCE_OPTION_FILES = list(options)
+        try:
+            return self.lint(deck_text, **kw)
+        finally:
+            (check_mod.REFERENCE_PATTERN_FILES,
+             check_mod.REFERENCE_OPTION_FILES) = old
+
+    def test_nothing_configured_says_nothing(self):
+        _dk, _c, findings = self.run_with(self.deck_with())
+        codes = self.codes(findings)
+        self.assertNotIn("unproper-pattern-file", codes)
+        self.assertNotIn("unproper-option-file", codes)
+
+    def test_blank_entries_are_ignored(self):
+        _dk, _c, findings = self.run_with(self.deck_with(),
+                                          patterns=["", "   "])
+        self.assertNotIn("unproper-pattern-file", self.codes(findings))
+
+    def test_a_copy_under_another_name_counts_as_a_match(self):
+        ref = self.write("golden.pat", self.PATTERN)
+        self.write("somebody_elses_copy.pat", self.PATTERN)
+        _dk, _c, findings = self.run_with(
+            self.deck_with("somebody_elses_copy.pat"), patterns=[ref])
+        self.assertNotIn("unproper-pattern-file", self.codes(findings))
+        note = [f for f in findings if f.code == "reference-file"][0]
+        self.assertIn("somebody_elses_copy.pat", note.message)
+
+    def test_different_content_warns(self):
+        ref = self.write("golden.inc", self.OPTIONS)
+        self.write("local.inc", ".option post=1\n.temp 85\n")
+        _dk, _c, findings = self.run_with(
+            self.deck_with("local.inc"), options=[ref])
+        bad = [f for f in findings if f.code == "unproper-option-file"]
+        self.assertEqual(len(bad), 1)
+        self.assertIn("golden.inc", bad[0].message)
+
+    def test_a_deck_that_reads_it_not_at_all_warns(self):
+        ref = self.write("golden.pat", self.PATTERN)
+        _dk, _c, findings = self.run_with(self.deck_with(), patterns=[ref])
+        self.assertIn("unproper-pattern-file", self.codes(findings))
+
+    def test_line_endings_and_trailing_space_do_not_count(self):
+        # the same file checked out on Windows and on the farm
+        ref = self.write("golden.inc", self.OPTIONS)
+        path = os.path.join(self.dir, "crlf.inc")
+        with open(path, "wb") as fh:
+            fh.write(self.OPTIONS.replace("\n", "   \r\n").encode())
+        _dk, _c, findings = self.run_with(
+            self.deck_with("crlf.inc"), options=[ref])
+        self.assertNotIn("unproper-option-file", self.codes(findings))
+
+    def test_a_skipped_file_still_counts(self):
+        # --skip is pointed at exactly the sort of directory these live in,
+        # and "you skipped it" is no reason to report it missing
+        from primesim_dm import check as check_mod
+        ref = self.write("golden.inc", self.OPTIONS)
+        self.write("pdk_opt.inc", self.OPTIONS)
+        path = self.write("d.sp", self.deck_with("pdk_opt.inc"))
+        dk = deck.read([path], search_dirs=[self.dir], skip=["pdk_opt"])
+        self.assertTrue(dk.skipped_files)       # it really was skipped
+        old = check_mod.REFERENCE_OPTION_FILES
+        check_mod.REFERENCE_OPTION_FILES = [ref]
+        try:
+            findings = check_mod.Checker(dk).run()
+        finally:
+            check_mod.REFERENCE_OPTION_FILES = old
+        self.assertNotIn("unproper-option-file", self.codes(findings))
+
+    def test_an_unreadable_reference_is_reported_not_passed(self):
+        missing = os.path.join(self.dir, "not_there.pat")
+        _dk, _c, findings = self.run_with(self.deck_with(),
+                                          patterns=[missing])
+        bad = [f for f in findings if f.code == "unproper-pattern-file"]
+        self.assertEqual(len(bad), 1)
+        self.assertIn("cannot be read", bad[0].message)
+
+    def test_both_kinds_report_under_their_own_code(self):
+        pat = self.write("p.pat", self.PATTERN)
+        opt = self.write("o.inc", self.OPTIONS)
+        _dk, _c, findings = self.run_with(self.deck_with(),
+                                          patterns=[pat], options=[opt])
+        codes = self.codes(findings)
+        self.assertIn("unproper-pattern-file", codes)
+        self.assertIn("unproper-option-file", codes)

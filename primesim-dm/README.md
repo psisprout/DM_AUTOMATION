@@ -162,6 +162,43 @@ opaque   : 1 file(s) read for interfaces only (insides not checked)
 > 패턴은 **전체 경로**에 걸리는 정규식입니다. `pdk` 처럼 짧게 쓰면 상위 디렉토리 이름에도
 > 걸리니 `/pdk/` 나 `\.spf$` 처럼 앵커를 넣으세요.
 
+### 기준 패턴 / 옵션 파일 확인
+
+"이 덱이 **약속된 패턴과 옵션**으로 돌고 있나"를 매 `lint` 마다 확인합니다.
+설정하는 곳은 딱 한 파일입니다:
+
+**`primesim_dm/references.py`** — 맨 아래 두 리스트에 **절대 경로**를 적으세요.
+
+```python
+REFERENCE_PATTERN_FILES = [
+    r"/proj/dm/ref/pattern_lpddr5_wr.pat",
+    r"/proj/dm/ref/pattern_lpddr5_rd.pat",     # 여러 개 가능
+]
+
+REFERENCE_OPTION_FILES = [
+    r"/proj/dm/ref/primesim_options.inc",
+]
+```
+
+**경로가 아니라 내용으로 맞춰봅니다.** 다른 디렉토리에 다른 이름으로 복사돼 있어도
+내용이 같으면 통과입니다 — 중요한 건 파일이 어디 있느냐가 아니라 덱이 그 패턴/옵션으로
+돌고 있느냐라서요.
+
+```
+WARN  unproper-option-file  no file this deck reads has the same content as the
+                            reference option file /proj/dm/ref/primesim_options.inc
+INFO  reference-file        pattern file pattern_lpddr5_wr.pat is in this deck as
+                            /proj/sim/DB/copied_pattern.pat
+```
+
+- **줄바꿈(CRLF/LF)과 줄 끝 공백은 무시**합니다. 같은 파일을 윈도우에서 받아온 사본이
+  다른 파일로 취급되면, 정작 통과시켜야 할 셋업에서 경고가 뜹니다.
+- **`--skip` 한 파일도 후보에 넣습니다.** 기준 파일은 보통 `--skip` 을 겨누는 그런
+  디렉토리에 있고, "네가 건너뛰었잖아"는 없다고 보고할 이유가 못 됩니다.
+- **기준 파일 자체를 못 읽으면 그것도 경고합니다.** 기준이 사라져서 조용히 통과하는 게
+  제일 나쁜 결과라서요.
+- **두 리스트가 비어 있으면 아무 검사도 안 합니다.** 빈 문자열 항목도 무시합니다.
+
 ### `.lib` 는 지정한 섹션만 읽습니다
 
 `.lib 'corners.lib' tt` 는 `tt` 섹션만 활성화합니다. 파일 전체를 읽으면 코너별 섹션이
@@ -226,6 +263,8 @@ INFO  merged-net         ball_dq0 and ball_dq1 are one node (Rshort = 0 ohm)
 | `floating-net` | WARN | 한 곳만 붙은 net (`--keep-net` 로 제외 가능) |
 | `unparsed-line` | WARN | 노드를 확정 못 한 줄 — **검사 범위 밖임을 명시** |
 | `merged-net` | INFO | 0옴 저항이나 `.connect` 로 두 net이 사실상 한 노드 |
+| `unproper-pattern-file` | WARN | 기준 패턴 파일과 내용이 같은 파일이 덱에 없음 |
+| `unproper-option-file` | WARN | 기준 옵션 파일과 내용이 같은 파일이 덱에 없음 |
 
 에러가 있으면 exit 1, `--strict` 면 경고에도 exit 1입니다.
 

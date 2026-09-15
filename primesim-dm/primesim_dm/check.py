@@ -6,8 +6,11 @@ that is the semantic layer's job.  These are the mistakes that are wrong
 regardless of what the deck is meant to represent.
 """
 
+import hashlib
 import os
 import re
+
+from .references import REFERENCE_OPTION_FILES, REFERENCE_PATTERN_FILES
 
 SEV_ERROR = "error"
 SEV_WARN = "warn"
@@ -40,6 +43,44 @@ def parse_value(token):
         if suffix.startswith(name):
             return base * mult
     return base                          # unknown trailing unit e.g. "10ohm"
+
+
+def content_key(path):
+    """A digest of a file's content, or None if it cannot be read.
+
+    Line endings and trailing spaces are normalised away first.  The same
+    file checked out on Windows and on the farm differs in both, and calling
+    those two different files would make this check fire on the very setup
+    it is meant to bless.
+    """
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except (OSError, IOError):
+        return None
+    text = raw.decode("utf-8", "replace").replace("\r\n", "\n").replace(
+        "\r", "\n")
+    lines = [ln.rstrip() for ln in text.split("\n")]
+    while lines and not lines[-1]:
+        lines.pop()
+    return hashlib.sha1("\n".join(lines).encode("utf-8")).hexdigest()
+
+
+def deck_file_paths(deck):
+    """Every file the deck pulled in, skipped and opaque ones included.
+
+    A reference file is often exactly the sort of thing --skip is pointed
+    at, and "you skipped it" is no reason to report it missing.
+    """
+    out, seen = [], set()
+    for path in (list(deck.files) + list(deck.skipped_files)
+                 + list(deck.opaque_files)):
+        # deck.files records the .lib section alongside the path
+        path = path.split(" [.lib ", 1)[0]
+        if path not in seen:
+            seen.add(path)
+            out.append(path)
+    return out
 
 
 def touching(users):
@@ -128,6 +169,42 @@ class Checker(object):
             self.add(SEV_INFO, "unparsed-line", "%s (%s)"
                      % (text[:90], reason),
                      "%s:%d" % (os.path.basename(path), line))
+
+    def check_reference_files(self):
+        """Is the deck using the pattern and option files it should be?"""
+        groups = (
+            ("pattern", REFERENCE_PATTERN_FILES, "unproper-pattern-file"),
+            ("option", REFERENCE_OPTION_FILES, "unproper-option-file"),
+        )
+        groups = [(kind, [str(r).strip() for r in refs if str(r).strip()],
+                   code) for kind, refs, code in groups]
+        if not any(refs for _kind, refs, _code in groups):
+            return                      # nothing configured, nothing to say
+
+        here = {}
+        for path in deck_file_paths(self.deck):
+            key = content_key(path)
+            if key and key not in here:
+                here[key] = path
+
+        for kind, refs, code in groups:
+            for ref in refs:
+                key = content_key(ref)
+                if key is None:
+                    # silently passing because the reference is unreadable
+                    # would be the one outcome worse than a false alarm
+                    self.add(SEV_WARN, code,
+                             "the reference %s file %s cannot be read, so "
+                             "this deck was not checked against it"
+                             % (kind, ref))
+                elif key in here:
+                    self.add(SEV_INFO, "reference-file",
+                             "%s file %s is in this deck as %s"
+                             % (kind, os.path.basename(ref), here[key]))
+                else:
+                    self.add(SEV_WARN, code,
+                             "no file this deck reads has the same content as "
+                             "the reference %s file %s" % (kind, ref))
 
     def check_duplicate_names(self):
         seen = {}
@@ -227,6 +304,7 @@ class Checker(object):
         self.check_includes()
         self.check_filters()
         self.check_unparsed()
+        self.check_reference_files()
         self.check_duplicate_names()
         self.check_instances()
         self.check_merged_nets()
