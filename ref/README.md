@@ -19,6 +19,7 @@ verbatim and substitutes only what must vary per bit:
 | `eye_width` / `eye_shift` / `em_vac` | UI / phase / vac from the config |
 | `fidx` and `name=` on the `line` | source file index and the bit's signal |
 | `attr=` on the `line` | trace colour, cycled per bit (see below) |
+| `eye_meas` | the config's `eye_type`, same value as `sx_measure_eye type=` |
 
 Everything else is copied byte for byte, so mask settings and any token this
 code does not model pass straight through.
@@ -39,13 +40,7 @@ First field is the bit's index in its byte, second the colour, wrapping at
 `attr_colors` (8). The remaining fields are carried from the reference, so
 changing `1:0` there changes it everywhere.
 
-## One token to eyeball
-
-`eye_mase=ddr4` is carried verbatim and its spelling was never confirmed
-(`eye_mask=off` appears separately in the same panel, so this looks like the
-measurement/mask *type* rather than the on/off switch). If the mask or
-measurement type comes out wrong in the GUI, that token is the suspect.
-Everything else in the panel is accounted for.
+Every token in the panel is accounted for: 11 substituted, the rest copied.
 
 ## Replacing a reference
 

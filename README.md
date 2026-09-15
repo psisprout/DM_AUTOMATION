@@ -94,6 +94,7 @@ reused verbatim, with only these substituted per bit:
 | `eye_width` / `eye_shift` / `em_vac` | UI / phase / vac from the config |
 | `fidx` and `name=` on the `line` | source file index and the bit's signal |
 | `attr=` on the `line` | trace colour, `<i>:<i mod attr_colors>:...`, cycled per byte |
+| `eye_meas` | the config's `eye_type` — the same value passed to `sx_measure_eye type=` |
 
 Every other token is copied byte for byte, so mask settings, colours and
 anything this code does not model survive untouched. If a key it means to
@@ -302,7 +303,12 @@ aperture model), on Tcl 8.6:
 - against a fixture whose `eye_width` key is malformed, the generator leaves
   the token alone and warns rather than guessing;
 - `attr=` comes out as `0:0:1:0 .. 7:7:1:0 8:0:1:0` for each byte, output
-  carries no tabs, and `line src=` / `attr=` are spelled as in the format.
+  carries no tabs, and `line src=` / `attr=` are spelled as in the format;
+- changing a config's `eye_type` moves `eye_meas=` in the generated `.sx` with
+  it, so the session's mask type cannot drift from the measurement's.
+
+Every token of the reference panel is accounted for — 11 substituted, the rest
+copied verbatim.
 
 The `sx_*` call signatures themselves are taken from the working script this
 was built from and are unverified here.

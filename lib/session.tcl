@@ -166,6 +166,7 @@ proc sess::panel_block {ref pidx cols fidx data_sig trig_sig vref cfg bit_idx} {
             sess::kv! ln eye_width [sess::fmt $cfg eye_width [dict get $cfg ui]]        "UI"
             sess::kv! ln eye_shift [sess::fmt $cfg eye_shift [dict get $cfg eye_shift]] "the eye shift"
             sess::kv! ln em_vac    [sess::fmt $cfg em_vac    [dict get $cfg vac]]       "vac"
+            sess::kv! ln eye_meas  [dict get $cfg eye_type]  "the mask type"
         } elseif {[regexp {^line\s} $t]} {
             sess::kv! ln fidx $fidx
             sess::kv! ln name $data_sig "the data signal"
