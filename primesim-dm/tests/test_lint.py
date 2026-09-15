@@ -691,20 +691,20 @@ class TestReferenceFiles(Harness):
     def test_nothing_configured_says_nothing(self):
         _dk, _c, findings = self.run_with(self.deck_with())
         codes = self.codes(findings)
-        self.assertNotIn("unproper-pattern-file", codes)
-        self.assertNotIn("unproper-option-file", codes)
+        self.assertNotIn("improper-pattern", codes)
+        self.assertNotIn("improper-option", codes)
 
     def test_blank_entries_are_ignored(self):
         _dk, _c, findings = self.run_with(self.deck_with(),
                                           patterns=["", "   "])
-        self.assertNotIn("unproper-pattern-file", self.codes(findings))
+        self.assertNotIn("improper-pattern", self.codes(findings))
 
     def test_a_copy_under_another_name_counts_as_a_match(self):
         ref = self.write("golden.pat", self.PATTERN)
         self.write("somebody_elses_copy.pat", self.PATTERN)
         _dk, _c, findings = self.run_with(
             self.deck_with("somebody_elses_copy.pat"), patterns=[ref])
-        self.assertNotIn("unproper-pattern-file", self.codes(findings))
+        self.assertNotIn("improper-pattern", self.codes(findings))
         note = [f for f in findings if f.code == "reference-file"][0]
         self.assertIn("somebody_elses_copy.pat", note.message)
 
@@ -713,14 +713,14 @@ class TestReferenceFiles(Harness):
         self.write("local.inc", ".option post=1\n.temp 85\n")
         _dk, _c, findings = self.run_with(
             self.deck_with("local.inc"), options=[ref])
-        bad = [f for f in findings if f.code == "unproper-option-file"]
+        bad = [f for f in findings if f.code == "improper-option"]
         self.assertEqual(len(bad), 1)
         self.assertIn("golden.inc", bad[0].message)
 
     def test_a_deck_that_reads_it_not_at_all_warns(self):
         ref = self.write("golden.pat", self.PATTERN)
         _dk, _c, findings = self.run_with(self.deck_with(), patterns=[ref])
-        self.assertIn("unproper-pattern-file", self.codes(findings))
+        self.assertIn("improper-pattern", self.codes(findings))
 
     def test_line_endings_and_trailing_space_do_not_count(self):
         # the same file checked out on Windows and on the farm
@@ -730,7 +730,7 @@ class TestReferenceFiles(Harness):
             fh.write(self.OPTIONS.replace("\n", "   \r\n").encode())
         _dk, _c, findings = self.run_with(
             self.deck_with("crlf.inc"), options=[ref])
-        self.assertNotIn("unproper-option-file", self.codes(findings))
+        self.assertNotIn("improper-option", self.codes(findings))
 
     def test_a_skipped_file_still_counts(self):
         # --skip is pointed at exactly the sort of directory these live in,
@@ -747,13 +747,13 @@ class TestReferenceFiles(Harness):
             findings = check_mod.Checker(dk).run()
         finally:
             check_mod.REFERENCE_OPTION_FILES = old
-        self.assertNotIn("unproper-option-file", self.codes(findings))
+        self.assertNotIn("improper-option", self.codes(findings))
 
     def test_an_unreadable_reference_is_reported_not_passed(self):
         missing = os.path.join(self.dir, "not_there.pat")
         _dk, _c, findings = self.run_with(self.deck_with(),
                                           patterns=[missing])
-        bad = [f for f in findings if f.code == "unproper-pattern-file"]
+        bad = [f for f in findings if f.code == "improper-pattern"]
         self.assertEqual(len(bad), 1)
         self.assertIn("cannot be read", bad[0].message)
 
@@ -763,5 +763,5 @@ class TestReferenceFiles(Harness):
         _dk, _c, findings = self.run_with(self.deck_with(),
                                           patterns=[pat], options=[opt])
         codes = self.codes(findings)
-        self.assertIn("unproper-pattern-file", codes)
-        self.assertIn("unproper-option-file", codes)
+        self.assertIn("improper-pattern", codes)
+        self.assertIn("improper-option", codes)

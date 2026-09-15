@@ -173,8 +173,8 @@ class Checker(object):
     def check_reference_files(self):
         """Is the deck using the pattern and option files it should be?"""
         groups = (
-            ("pattern", REFERENCE_PATTERN_FILES, "unproper-pattern-file"),
-            ("option", REFERENCE_OPTION_FILES, "unproper-option-file"),
+            ("pattern", REFERENCE_PATTERN_FILES, "improper-pattern"),
+            ("option", REFERENCE_OPTION_FILES, "improper-option"),
         )
         groups = [(kind, [str(r).strip() for r in refs if str(r).strip()],
                    code) for kind, refs, code in groups]

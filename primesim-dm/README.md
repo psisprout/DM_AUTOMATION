@@ -185,7 +185,7 @@ REFERENCE_OPTION_FILES = [
 돌고 있느냐라서요.
 
 ```
-WARN  unproper-option-file  no file this deck reads has the same content as the
+WARN  improper-option  no file this deck reads has the same content as the
                             reference option file /proj/dm/ref/primesim_options.inc
 INFO  reference-file        pattern file pattern_lpddr5_wr.pat is in this deck as
                             /proj/sim/DB/copied_pattern.pat
@@ -263,8 +263,8 @@ INFO  merged-net         ball_dq0 and ball_dq1 are one node (Rshort = 0 ohm)
 | `floating-net` | WARN | 한 곳만 붙은 net (`--keep-net` 로 제외 가능) |
 | `unparsed-line` | WARN | 노드를 확정 못 한 줄 — **검사 범위 밖임을 명시** |
 | `merged-net` | INFO | 0옴 저항이나 `.connect` 로 두 net이 사실상 한 노드 |
-| `unproper-pattern-file` | WARN | 기준 패턴 파일과 내용이 같은 파일이 덱에 없음 |
-| `unproper-option-file` | WARN | 기준 옵션 파일과 내용이 같은 파일이 덱에 없음 |
+| `improper-pattern` | WARN | 기준 패턴 파일과 내용이 같은 파일이 덱에 없음 |
+| `improper-option` | WARN | 기준 옵션 파일과 내용이 같은 파일이 덱에 없음 |
 
 에러가 있으면 exit 1, `--strict` 면 경고에도 exit 1입니다.
 
