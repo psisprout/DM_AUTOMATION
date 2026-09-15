@@ -1,0 +1,13 @@
+wdf 0 "/absolute/path/a.fsdb" load=used
+scalar list
+waveview_begin 1 horiz mntr_b=66 style=1 "name=waveview 1"
+	panel_begin eyediag pidx=0 ridx=0 cidx=0 topname=0 npos=66 spath=name+file eye_plot=fold eye_mask=off eye_trig=ext eye_ext=0|v(rcv1_pad_pwck0,rcv1_pad_nwck0) eye_edge=cross eye_alvl=single eye_level=0e+00 eye_trig_tolerance=0.0000E+00 eye_ttpercent=false eye_shift=-1.5625e-10 eye_auto=false eye_width-3.125e-10 eye_mase=ddr4 em_vac=25m em_vdc=0 em_vref=125m em_aper=true em_vihlAC=false em_clkdly=0
+		line scr=wdf lidx=0 fidx=0 "delim=." sigtype=1 "name=v(rcv1_pad_dq0)" attr0:0:1:0 autoset=true disp=show
+	panel_end
+	panel_begin eyediag pidx=1 ridx=0 cidx=1 topname=0 npos=66 spath=name+file eye_plot=fold eye_mask=off eye_trig=ext eye_ext=0|v(rcv1_pad_pwck0,rcv1_pad_nwck0) eye_edge=cross eye_alvl=single eye_level=0e+00 eye_trig_tolerance=0.0000E+00 eye_ttpercent=false eye_shift=-1.5625e-10 eye_auto=false eye_width-3.125e-10 eye_mase=ddr4 em_vac=25m em_vdc=0 em_vref=125m em_aper=true em_vihlAC=false em_clkdly=0
+		line scr=wdf lidx=0 fidx=0 "delim=." sigtype=1 "name=v(rcv1_pad_dq1)" attr0:0:1:0 autoset=true disp=show
+	panel_end
+	panel_begin eyediag pidx=18 ridx=4 cidx=2 topname=0 npos=66 spath=name+file eye_plot=fold eye_mask=off eye_shift=0e+00 eye_auto=true
+	panel_end
+waveview_end
+browserOpened

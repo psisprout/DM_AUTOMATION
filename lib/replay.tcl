@@ -47,19 +47,15 @@ eye::save_session "@SESSION@"
 
     set bytes ""
     foreach b [dict get $cfg byte_order] {
-        set bc      [dict get $cfg bytes $b]
-        set prefix  [dict get $bc pad_prefix]
-        set idx     [dict get $bc dqs_idx]
-        set bits    [dict get $bc bits]
+        set bits    [dict get $cfg bytes $b bits]
         set vref    [dict get $results $b vref]
-        set strobe  [eye::strobe_signal_name $prefix \
-                        [dict get $cfg pdqs] [dict get $cfg ndqs] $idx]
+        set strobe  [eye::strobe_sig $cfg $b]
 
         append bytes "# ---- byte $b : vref = $vref ------------------------------------------\n"
         append bytes "set trig$b \[sx_signal \"$strobe\"\]\n"
         append bytes "set VREF$b  $vref\n"
         foreach bit $bits {
-            set dsig [eye::data_signal_name $prefix $bit]
+            set dsig [eye::data_sig $cfg $b $bit]
             set ps   [eye::fmt_ps [dict get $results $b per_bit $bit]]
             append bytes "set eye_$bit \[eye::create \"$dsig\" \$trig$b \$UI_VALUE \$EYE_SHIFT\]\n"
             append bytes "sx_measure_eye \$eye_$bit type=\$EYE_TYPE vref=\$VREF$b vac=\$VAC_VALUE\n"

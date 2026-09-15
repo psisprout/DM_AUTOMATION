@@ -244,13 +244,29 @@ proc eye::parse_sweep {spec} {
 # Signal name builders.  Adjust here if your netlist naming differs -- this is
 # the single place the whole flow derives signal names from.
 # --------------------------------------------------------------------------
-proc eye::data_signal_name {pad_prefix bit} {
-    return "v(${pad_prefix}_${bit})"
+# Signal names come from format strings in the config, not from this code,
+# so a new protocol is a new cfg/ file rather than a code change.
+#   %prefix%  the byte's pad_prefix      %bit%   the bit name (dq0, dmi1, ...)
+#   %pdqs% %ndqs%  strobe p/n roots      %idx%   the byte's strobe index
+proc eye::render {fmt cfg b {bit ""}} {
+    set bc [dict get $cfg bytes $b]
+    return [string map [list \
+        %prefix% [dict get $bc pad_prefix] \
+        %bit%    $bit \
+        %idx%    [dict get $bc dqs_idx] \
+        %pdqs%   [dict get $cfg pdqs] \
+        %ndqs%   [dict get $cfg ndqs] \
+    ] $fmt]
 }
 
-# Differential strobe: v(<prefix>_<pdqs><idx>, <prefix>_<ndqs><idx>)
-proc eye::strobe_signal_name {pad_prefix pdqs ndqs idx} {
-    return "v(${pad_prefix}_${pdqs}${idx},${pad_prefix}_${ndqs}${idx})"
+proc eye::data_sig   {cfg b bit} { return [eye::render [dict get $cfg data_fmt]   $cfg $b $bit] }
+proc eye::strobe_sig {cfg b}     { return [eye::render [dict get $cfg strobe_fmt] $cfg $b] }
+
+# Which wdf index a byte's signals live in (multi-fsdb sessions).
+proc eye::byte_fidx {cfg b} {
+    set bc [dict get $cfg bytes $b]
+    if {[dict exists $bc fidx]} { return [dict get $bc fidx] }
+    return 0
 }
 
 # --------------------------------------------------------------------------

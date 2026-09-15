@@ -83,6 +83,7 @@ puts $csv [join $header ,]
 flush $csv
 
 # ---- main loop ------------------------------------------------------------
+set ALL_ENTRIES {}
 set fsdb_list [lsort [glob -nocomplain [dict get $CFG fsdb_glob]]]
 if {[llength $fsdb_list] == 0} {
     eye::log "WARNING: no files matched [dict get $CFG fsdb_glob] in [pwd]"
@@ -97,19 +98,14 @@ foreach fsdb $fsdb_list {
 
     set results [dict create]
     foreach b [dict get $CFG byte_order] {
-        set bc     [dict get $CFG bytes $b]
-        set prefix [dict get $bc pad_prefix]
-        set bits   [dict get $bc bits]
-
-        set strobe [eye::strobe_signal_name $prefix \
-                        [dict get $CFG pdqs] [dict get $CFG ndqs] [dict get $bc dqs_idx]]
-        set trig   [sx_signal $strobe]
+        set bits [dict get $CFG bytes $b bits]
+        set trig [sx_signal [eye::strobe_sig $CFG $b]]
 
         # One eye object per bit, reused across all sweep points.
         set eyes [dict create]
         foreach bit $bits {
             dict set eyes $bit [eye::create \
-                [eye::data_signal_name $prefix $bit] $trig \
+                [eye::data_sig $CFG $b $bit] $trig \
                 [dict get $CFG ui] [dict get $CFG eye_shift]]
         }
 
@@ -139,14 +135,21 @@ foreach fsdb $fsdb_list {
         [file join $OUT_DIR "${stem}_[dict get $CFG name].replay.tcl"] \
         $CFG $fsdb $results
 
-    if {$WRITE_SESSION} {
+    lappend ALL_ENTRIES [list $fsdb $results]
+    if {$WRITE_SESSION && [dict get $CFG session_scope] eq "per_fsdb"} {
         sess::write \
-            [file join $OUT_DIR "${stem}_[dict get $CFG name].session"] \
-            $CFG $fsdb $results
+            [file join $OUT_DIR "${stem}_[dict get $CFG name].sx"] \
+            $CFG [list [list $fsdb $results]]
     }
 
     eye::close_file $fh
 }
 
 close $csv
+
+# One combined .sx holding every fsdb as its own wdf index, when asked for.
+if {$WRITE_SESSION && [dict get $CFG session_scope] eq "all_fsdb" && [llength $ALL_ENTRIES]} {
+    sess::write [file join $OUT_DIR "[dict get $CFG name].sx"] $CFG $ALL_ENTRIES
+}
+
 eye::log "done -> $csv_path"

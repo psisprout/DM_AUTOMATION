@@ -35,19 +35,46 @@ Outputs land in `out/`:
 | file | contents |
 |---|---|
 | `out/<cfg>_eye.csv` | `fsdb,dq0..dq7,dmi0,dq8..dq15,dmi1,vref0,vref1` |
-| `out/<fsdb>_<cfg>.session` | **WaveView session — 18 eyes on a 5x4 grid, at the measured vref** |
+| `out/<fsdb>_<cfg>.sx` | **WaveView session — every bit's eye on a grid, at the measured vref** |
 | `out/<fsdb>_<cfg>.replay.tcl` | fallback: ACE script that redraws the eyes (see below) |
 
 The session is written directly as text during the headless measurement pass,
 so one `-no_gui` run produces both the numbers and something to open. No ACE
 display commands, no GUI scripting.
 
-Session writing needs a reference session in `ref/waveview.session` — see
-[ref/README.md](ref/README.md). Without it the measurement still runs and only
-the session output is skipped.
+With `session_scope all_fsdb` the per-fsdb files are replaced by a single
+`out/<cfg>.sx` holding every fsdb as `wdf 0,1,2...`, each panel tagged with the
+matching `fidx`.
 
-To look at a result: `sx_sub`, then open
-`out/corner_tt_1p0v_lp5x_write.session`.
+Session writing needs a reference `.sx` per protocol — see
+[ref/README.md](ref/README.md). Without it the measurement still runs and only
+the `.sx` output is skipped.
+
+To look at a result: `sx_sub`, then open `out/corner_tt_1p0v_lp5x_write.sx`.
+
+## Adding a protocol
+
+A protocol is a file in `cfg/` plus its own reference `.sx`. No code changes.
+`cfg/nand_read.tcl` is a filled-in skeleton to copy. What a config owns:
+
+| | |
+|---|---|
+| `ui` `eye_shift` `vac` `vref_sweep` `eye_type` | timing and the measurement |
+| `data_fmt` `strobe_fmt` | **signal naming**, as format strings |
+| `byte_order` + `bytes` | how many bytes, which bits, which pad instance and strobe index — and the CSV column order |
+| `session_template` `grid_cols` `session_scope` | `.sx` output |
+| `session_fmt` | how each `.sx` field is written (see below) |
+
+Signal names are format strings rather than code, so a different netlist
+convention is a config edit:
+
+```tcl
+dict set CFG data_fmt   {v(%prefix%_%bit%)}
+dict set CFG strobe_fmt {v(%prefix%_%pdqs%%idx%,%prefix%_%ndqs%%idx%)}
+```
+
+`%prefix%` is the byte's `pad_prefix`, `%bit%` the bit name, `%idx%` its strobe
+index, `%pdqs%`/`%ndqs%` the strobe p/n roots.
 
 ## How the session is built
 
@@ -60,18 +87,32 @@ reused verbatim, with only these substituted per bit:
 
 | field | value |
 |---|---|
-| `pidx` / `ridx` / `cidx` | grid position, row-major over `grid_cols` (4) |
-| `eye_ext` | `0|<differential strobe>` for that byte |
-| `em_vref` | the byte's measured vref, as mV (`0.160` -> `160m`) |
+| `pidx` / `ridx` / `cidx` | grid position, row-major over `grid_cols` |
+| `eye_ext` | `<fidx>|<differential strobe>` for that byte |
+| `em_vref` | the byte's measured vref |
 | `eye_width` / `eye_shift` / `em_vac` | UI / phase / vac from the config |
-| `name=` on the `line` | that bit's data signal |
+| `fidx` and `name=` on the `line` | source file index and the bit's signal |
 
-Every other token is copied byte for byte, so anything this code does not
-understand survives untouched. If a key it means to substitute is missing from
-the reference it says so instead of silently emitting the reference value.
+Every other token is copied byte for byte, so mask settings, colours and
+anything this code does not model survive untouched. If a key it means to
+substitute is missing from the reference it says so instead of silently
+emitting the reference value.
 
-18 eyes fill `pidx` 0..17 in CSV column order (byte 0 then byte 1); the last
-row is padded with the reference's empty panel to complete the grid.
+Panels fill `pidx` from 0 in CSV column order; the last row is padded with the
+reference's empty panel to complete the grid.
+
+### Units
+
+The `.sx` format is not uniform — times are scientific notation, voltages keep
+an SI suffix — while config values are SPICE style. `session_fmt` says how each
+field is written:
+
+```tcl
+dict set CFG session_fmt [dict create eye_width sci eye_shift sci em_vac milli em_vref milli]
+```
+
+`sci` gives `-156.25p` -> `-1.5625e-10`, `milli` gives `0.1375` -> `137.5m`.
+Anything unlisted is copied verbatim.
 
 ## How the vref is chosen
 
@@ -247,13 +288,17 @@ aperture model), on Tcl 8.6:
 - the byte-level max-min vref search matches an independent brute-force
   recomputation, bit for bit;
 - generated replay scripts execute and reproduce the CSV apertures exactly;
-- generated sessions parse back to 20 panels (18 eyes + 2 empty) with `pidx`
-  contiguous and `pidx == ridx*4 + cidx` throughout, and every panel's signal,
-  trigger and `em_vref` match the CSV row for that fsdb.
-
-Session generation was exercised against `ref/sample_from_chat.session`, which
-carries the transcription typo `eye_width-312.5p`; the generator left that
-token alone and warned rather than guessing.
+- generated `.sx` files parse back with `pidx` contiguous and
+  `pidx == ridx*grid_cols + cidx` throughout, and every panel's signal, trigger
+  and `em_vref` match the CSV row for that fsdb;
+- `session_scope all_fsdb` emits 3 `wdf` lines and 54 eye panels, 18 per
+  `fidx`, each carrying its own file's per-byte vref;
+- unit conversion: `-156.25p` -> `-1.5625e-10`, `625p` -> `6.25e-10`,
+  `0.1375` -> `137.5m`, and values already in scientific notation pass through;
+- swapping to `cfg/nand_read.tcl` changes bit count, CSV header, strobe naming
+  and UI with no code change;
+- against a fixture whose `eye_width` key is malformed, the generator leaves
+  the token alone and warns rather than guessing.
 
 The `sx_*` call signatures themselves are taken from the working script this
 was built from and are unverified here.

@@ -1,8 +1,8 @@
 # ---------------------------------------------------------------------------
-# cfg/lp5x_write.tcl -- LP5x WRITE eye measurement setup
+# cfg/lp5x_write.tcl -- LP5x WRITE
 #
-# Everything site-specific lives here.  measure_eye.tcl reads the CFG dict
-# built at the bottom and needs nothing else.
+# A protocol is defined entirely by a file like this one plus its own
+# reference .sx.  measure_eye.tcl and lib/ contain no protocol knowledge.
 # ---------------------------------------------------------------------------
 
 set UI_VALUE     312.5p
@@ -33,12 +33,36 @@ set CFG [dict create \
     ndqs        $NDQS \
     fsdb_glob   $FSDB_GLOB \
     lib_relpath ../lib \
-    session_template ref/waveview.session \
-    grid_cols   4 \
-    byte_order  {0 1} \
 ]
 
-# Per byte: which pad instance it sits on, which strobe index it is clocked
-# by, and its bit order (which is also the CSV column order).
+# --- signal naming ----------------------------------------------------------
+# %prefix% = the byte's pad_prefix, %bit% = dq0/dmi1/..., %idx% = strobe index,
+# %pdqs%/%ndqs% = strobe p/n roots.  Change these, not the code, for a
+# different netlist convention.
+dict set CFG data_fmt   {v(%prefix%_%bit%)}
+dict set CFG strobe_fmt {v(%prefix%_%pdqs%%idx%,%prefix%_%ndqs%%idx%)}
+
+# --- session output ---------------------------------------------------------
+dict set CFG session_template ref/lp5x_write.sx
+dict set CFG grid_cols        4
+# per_fsdb : one .sx per fsdb (wdf 0)
+# all_fsdb : one .sx holding every fsdb as wdf 0,1,2... with matching fidx
+dict set CFG session_scope    per_fsdb
+
+# The .sx format is not uniform: times are scientific notation, voltages keep
+# an SI suffix.  Config values are SPICE style, so say how each field is
+# written.  'raw' (the default for anything unlisted) copies verbatim.
+dict set CFG session_fmt [dict create \
+    eye_width sci   \
+    eye_shift sci   \
+    em_vac    milli \
+    em_vref   milli \
+]
+
+# --- bytes ------------------------------------------------------------------
+# Per byte: pad instance, strobe index, bit order (also the CSV column order),
+# and optionally fidx -- which wdf index its signals come from, for sessions
+# built from several fsdb files.
+dict set CFG byte_order {0 1}
 dict set CFG bytes 0 [dict create pad_prefix $PAD_PREFIX1 dqs_idx 0 bits $BYTE0_BITS]
 dict set CFG bytes 1 [dict create pad_prefix $PAD_PREFIX2 dqs_idx 1 bits $BYTE1_BITS]

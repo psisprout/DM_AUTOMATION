@@ -1,30 +1,48 @@
-# Reference session
+# Reference sessions
 
-Put a **real** WaveView session here as `waveview.session`:
+Each protocol needs its own reference `.sx` here, named by the config's
+`session_template` — `ref/lp5x_write.sx`, `ref/nand_read.sx`, and so on.
+
+To make one:
 
 1. `sx_sub` to open the GUI
-2. open one fsdb, build one eye the way you want it
+2. open one fsdb and build **one eye** the way you want that protocol to look
+   (mask, plot mode, trigger, edge, colours — all of it)
 3. File -> Save Session
-4. copy the saved file to `ref/waveview.session`
+4. save it here under the name the config expects
 
-`lib/session.tcl` reuses that file's `panel_begin` / `line` / `panel_end` lines
-verbatim and substitutes only the fields that must vary per bit (`pidx`,
-`ridx`, `cidx`, `eye_ext`, `em_vref`, `eye_width`, `eye_shift`, `em_vac`, and
-the signal `name`). Everything else is copied byte for byte, so tokens this
-code does not understand are preserved.
+`lib/session.tcl` reuses that file's `panel_begin` / `line` / `panel_end`
+lines verbatim and substitutes only what must vary per bit:
 
-If a key it wants to substitute is absent it says so on startup rather than
-silently emitting the reference value:
+| field | value |
+|---|---|
+| `pidx` / `ridx` / `cidx` | grid position, row-major over `grid_cols` |
+| `eye_ext` | `<fidx>|<differential strobe>` |
+| `em_vref` | that byte's measured vref |
+| `eye_width` / `eye_shift` / `em_vac` | UI / phase / vac from the config |
+| `fidx` and `name=` on the `line` | source file index and the bit's signal |
+
+Everything else is copied byte for byte, so mask settings, colours and any
+token this code does not model survive untouched. That is the point: a new
+protocol is a new cfg/ file plus a reference `.sx`, not a code change.
+
+If a key it means to substitute is absent it says so rather than silently
+emitting the reference value:
 
 ```
-[eye] WARNING: 'eye_width=' not found in the reference session panel.
+[eye] WARNING: 'eye_width=' not found in the reference .sx panel.
 [eye] WARNING: UI will keep the reference value instead.
 ```
 
-Without `waveview.session` the measurement still runs; session writing is
+Without the reference the measurement still runs and only `.sx` output is
 skipped.
 
-`sample_from_chat.session` is a hand-transcribed excerpt used only to test the
-generator. It contains transcription typos (`eye_width-312.5p` with a hyphen,
-`eye_mase`, `eye_alvl=sigle`, `eye_plot=flod`, `npose`, and an `eye_shift`
-exponent that disagrees with the UI). **Do not use it as the template.**
+## samples/
+
+Test fixtures only — **do not point a config at these.**
+
+- `lp5x_write.sample.sx` — hand-transcribed from a real session. Believed
+  correct after corrections, but `eye_mase=ddr4` was never confirmed and the
+  panel set is abridged.
+- `broken_key.sample.sx` — the same file with `eye_width` deliberately
+  malformed, to exercise the warning path.

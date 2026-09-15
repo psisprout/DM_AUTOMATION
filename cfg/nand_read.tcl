@@ -1,16 +1,16 @@
 # ---------------------------------------------------------------------------
-# cfg/nand_read.tcl -- NAND READ eye measurement setup
+# cfg/nand_read.tcl -- NAND READ
 #
-# TEMPLATE.  The values below are placeholders copied from the LP5x flow --
-# replace UI / phase / vac / sweep / prefixes / bit list with the NAND numbers
-# before using.  The driver logic is identical; only this file changes.
+# TEMPLATE.  Timing, naming and the reference .sx below are placeholders
+# carried over from the LP5x flow -- replace them with the NAND values.
+# Nothing outside this file and ref/nand_read.sx needs to change.
 # ---------------------------------------------------------------------------
 
-set UI_VALUE     625p           ;# <-- set to the NAND UI
-set EYE_SHIFT    -312.5p        ;# <-- usually -UI/2
+set UI_VALUE     625p            ;# <-- NAND UI
+set EYE_SHIFT    -312.5p         ;# <-- usually -UI/2
 set VAC_VALUE    25m
 set VREF_SWEEP   0.05:0.25:0.005
-set EYE_TYPE     ddr4           ;# <-- confirm the mask type for NAND
+set EYE_TYPE     ddr4            ;# <-- confirm the mask type for NAND
 
 set PAD_PREFIX1  rcv1_pad
 set NDQS         ndqs
@@ -32,9 +32,21 @@ set CFG [dict create \
     ndqs        $NDQS \
     fsdb_glob   $FSDB_GLOB \
     lib_relpath ../lib \
-    session_template ref/waveview.session \
-    grid_cols   4 \
-    byte_order  {0} \
 ]
 
+dict set CFG data_fmt   {v(%prefix%_%bit%)}
+dict set CFG strobe_fmt {v(%prefix%_%pdqs%%idx%,%prefix%_%ndqs%%idx%)}
+
+dict set CFG session_template ref/nand_read.sx
+dict set CFG grid_cols        4
+dict set CFG session_scope    per_fsdb
+
+dict set CFG session_fmt [dict create \
+    eye_width sci   \
+    eye_shift sci   \
+    em_vac    milli \
+    em_vref   milli \
+]
+
+dict set CFG byte_order {0}
 dict set CFG bytes 0 [dict create pad_prefix $PAD_PREFIX1 dqs_idx 0 bits $BYTE0_BITS]
