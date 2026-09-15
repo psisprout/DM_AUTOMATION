@@ -116,6 +116,33 @@ available without SolvNet. Expect every probed command to report an error;
 that is the mechanism working, not a failure. Everything goes to the output
 file and nothing is acted on. Do not run `-usage` inside a flow that matters.
 
+### An eye needs an eye-diagram panel, not an XY panel
+
+This build creates panels with `sx_new_panel`. Called bare it returns the
+default **XY** panel, and an eye will not render there. `eye::ensure_window`
+therefore asks for the type explicitly, trying the plausible tokens (`eye`,
+`eyediagram`, `eye_diagram`, ...) and confirming the result with
+`sx_get_panel_type`; failing that it makes a bare panel and tries
+`sx_set_panel_y_type` / `sx_set_panel_x_type`. If the panel still is not an
+eye panel it says so rather than drawing into the wrong thing:
+
+```
+[eye] WARNING: panel PANEL:1 is type 'XY', not an eye
+[eye] WARNING: eyes will not render here.  Run probe_eye.tcl in the
+[eye] WARNING: GUI and pin sx_new_panel's real type argument.
+```
+
+`probe_eye.tcl` asks about ~20 commands only — panel creation/type/selection,
+the eye commands, and whatever session commands exist — and prints to the
+console as well as `out/eye_usage.txt`, so the output stays readable:
+
+```
+sx_sub            # GUI, then Run ACE script -> probe_eye.tcl
+```
+
+Run it in the GUI. Under `-no_gui` the graphical commands answer "batch mode"
+instead of their signature.
+
 ### Display only works in the GUI
 
 `sx_display_eye` exists on this build but refuses under `-no_gui`:

@@ -50,8 +50,11 @@ proc eye::probe {} {
     # Display layer.  sx_create_eye only builds the data object -- in the GUI
     # something still has to open a panel and put the curve in it, or the
     # script completes with an empty window.  Eye-specific plotters first.
-    foreach c {sx_create_window sx_open_window sx_new_window sx_add_window
-               sx_create_panel sx_add_panel sx_new_panel} {
+    # sx_new_panel is what this build has; called bare it yields the default
+    # XY panel, and an eye will not render there -- eyes need an eye-diagram
+    # panel.  eye::ensure_window asks for the type explicitly.
+    foreach c {sx_new_panel sx_create_panel sx_add_panel
+               sx_create_window sx_open_window sx_new_window} {
         if {[llength [info commands $c]] > 0} { set WINDOW_CMD $c; break }
     }
     # sx_display_eye confirmed present on this build (F-2011.09 era ACE); it
@@ -95,18 +98,70 @@ proc eye::ensure_window {{title "eye"}} {
     eye::probe
     if {$CUR_WIN ne "" || $BATCH} { return $CUR_WIN }
     if {$WINDOW_CMD eq ""} { return "" }
-    if {[catch {$WINDOW_CMD} w]} {
-        if {[eye::batch_error $w]} { return "" }
-        # Some builds want a type/title argument.
-        if {[catch {$WINDOW_CMD $title} w]} {
-            if {[eye::batch_error $w]} { return "" }
-            eye::log "$WINDOW_CMD failed: $w"
+
+    # An eye only renders in an eye-diagram panel, not the default XY panel,
+    # so ask for the type up front.  The exact type token is not documented
+    # here; try the plausible spellings and confirm with sx_get_panel_type.
+    set made ""
+    foreach type {eye eyediagram eye_diagram EYE Eye "eye diagram"} {
+        if {[catch {$WINDOW_CMD $type} p]} {
+            if {[eye::batch_error $p]} { return "" }
+            continue
+        }
+        if {[eye::panel_is_eye $p]} {
+            set CUR_WIN $p
+            eye::log "eye panel created: $WINDOW_CMD \"$type\" -> $p"
+            eye::set_title $p $title
+            return $p
+        }
+        # Wrong type but a panel exists -- keep the first one as a fallback.
+        if {$made eq ""} { set made $p }
+    }
+
+    # Nothing took a type argument.  Make a bare panel and try to convert it.
+    if {$made eq ""} {
+        if {[catch {$WINDOW_CMD} made]} {
+            if {[eye::batch_error $made]} { return "" }
+            eye::log "$WINDOW_CMD failed: $made"
             return ""
         }
     }
-    set CUR_WIN $w
-    eye::log "window opened via $WINDOW_CMD -> $w"
-    return $w
+    foreach setter {sx_set_panel_y_type sx_set_panel_x_type} {
+        if {[llength [info commands $setter]] == 0} { continue }
+        foreach type {eye eyediagram eye_diagram EYE} {
+            catch {$setter $made $type}
+        }
+    }
+
+    set CUR_WIN $made
+    eye::set_title $made $title
+    if {[eye::panel_is_eye $made]} {
+        eye::log "eye panel created (type set after creation) -> $made"
+    } else {
+        eye::log "WARNING: panel $made is type '[eye::panel_type $made]', not an eye"
+        eye::log "WARNING: eyes will not render here.  Run probe_eye.tcl in the"
+        eye::log "WARNING: GUI and pin sx_new_panel's real type argument."
+    }
+    return $CUR_WIN
+}
+
+proc eye::panel_type {panel} {
+    if {[llength [info commands sx_get_panel_type]] == 0} { return "" }
+    if {[catch {sx_get_panel_type $panel} t]} { return "" }
+    return $t
+}
+
+# Unknown type token means unknown reply, so treat "could not ask" as a pass
+# and let the WARNING path above depend on an answer we actually got.
+proc eye::panel_is_eye {panel} {
+    set t [eye::panel_type $panel]
+    if {$t eq ""} { return 1 }
+    return [string match -nocase "*eye*" $t]
+}
+
+proc eye::set_title {panel title} {
+    if {[llength [info commands sx_set_panel_title]] == 0} { return }
+    catch {sx_set_panel_title $panel $title}
 }
 
 # Graphical ACE commands refuse to run under -no_gui.  Recognise that once and
