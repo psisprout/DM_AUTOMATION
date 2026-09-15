@@ -46,7 +46,9 @@ set CFG [dict create \
 dict set CFG data_fmt   {v(%prefix%_%bit%)}
 dict set CFG strobe_fmt {v(%prefix%_%pdqs%%idx%,%prefix%_%ndqs%%idx%)}
 
-dict set CFG session_template ref/lp5x_ca.sx
+# Panel template: built in.  Uncomment to lift it from a saved .sx instead,
+# or override sx_panel / sx_header / sx_empty / sx_footer directly.
+# dict set CFG session_template ref/lp5x_ca.sx
 dict set CFG grid_cols        4
 dict set CFG attr_colors      8
 dict set CFG session_scope    per_fsdb

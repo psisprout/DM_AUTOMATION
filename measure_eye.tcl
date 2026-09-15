@@ -52,17 +52,13 @@ eye::log "config: $CFG_FILE ([dict get $CFG name])"
 set OUT_DIR [file join $SCRIPT_DIR out]
 file mkdir $OUT_DIR
 
-# Session writing needs a real saved session as the panel template.  Without
-# one the measurement still runs; only the session files are skipped.
-set TPL [dict get $CFG session_template]
-if {[file pathtype $TPL] eq "relative"} { set TPL [file join $SCRIPT_DIR $TPL] }
-set WRITE_SESSION [file readable $TPL]
-if {$WRITE_SESSION} {
-    dict set CFG session_template $TPL
-    eye::log "session template: $TPL"
-} else {
-    eye::log "no reference session at $TPL -- skipping session output."
-    eye::log "see ref/README.md; measurement and CSV are unaffected."
+# Panel templates are built in; a config may override them, or point
+# session_template at a saved .sx to lift them from a real session.
+if {[dict exists $CFG session_template]} {
+    set TPL [dict get $CFG session_template]
+    if {$TPL ne "" && [file pathtype $TPL] eq "relative"} {
+        dict set CFG session_template [file join $SCRIPT_DIR $TPL]
+    }
 }
 
 eye::probe
@@ -129,7 +125,7 @@ foreach fsdb $fsdb_list {
     # ---- session ----------------------------------------------------------
     set stem [file rootname [file tail $fsdb]]
     lappend ALL_ENTRIES [list $fsdb $results]
-    if {$WRITE_SESSION && [dict get $CFG session_scope] eq "per_fsdb"} {
+    if {[dict get $CFG session_scope] eq "per_fsdb"} {
         sess::write \
             [file join $OUT_DIR "${stem}_[dict get $CFG name].sx"] \
             $CFG [list [list $fsdb $results]]
@@ -141,7 +137,7 @@ foreach fsdb $fsdb_list {
 close $csv
 
 # One combined .sx holding every fsdb as its own wdf index, when asked for.
-if {$WRITE_SESSION && [dict get $CFG session_scope] eq "all_fsdb" && [llength $ALL_ENTRIES]} {
+if {[dict get $CFG session_scope] eq "all_fsdb" && [llength $ALL_ENTRIES]} {
     sess::write [file join $OUT_DIR "[dict get $CFG name].sx"] $CFG $ALL_ENTRIES
 }
 

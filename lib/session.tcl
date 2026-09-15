@@ -88,6 +88,63 @@ proc sess::get_kv {line key} {
 }
 
 # --------------------------------------------------------------------------
+# Built-in templates.  Values here are placeholders -- every one of them is
+# replaced via session_subst; only the tokens this flow does not model
+# (eye_plot, eye_edge, em_aper, sigtype, ...) survive as written.
+#
+# A protocol whose panel carries different fields overrides these in its
+# config:   dict set CFG sx_panel { {  panel_begin ...} {    line ...} {  panel_end} }
+# or points session_template at a saved .sx to lift them from a real session.
+# --------------------------------------------------------------------------
+proc sess::builtin {} {
+    return [dict create \
+        header [list \
+            {wdf 0 "" load=used} \
+            {scalar list} \
+            {waveview_begin 1 horiz mntr_b=66 style=1 "name=waveview 1"} \
+        ] \
+        panel [list \
+            {  panel_begin eyediag pidx=0 ridx=0 cidx=0 topname=0 npos=66 spath=name+file eye_plot=fold eye_mask=off eye_trig=ext eye_ext=0| eye_edge=cross eye_alvl=single eye_level=0e+00 eye_trig_tolerance=0.0000E+00 eye_ttpercent=false eye_shift=0e+00 eye_auto=false eye_width=0e+00 eye_meas=ddr4 em_vac=0m em_vdc=0 em_vref=0m em_aper=true em_vihlAC=false em_clkdly=0} \
+            {    line src=wdf lidx=0 fidx=0 "delim=." sigtype=1 "name=" attr=0:0:1:0 autoset=true disp=show} \
+            {  panel_end} \
+        ] \
+        empty [list \
+            {  panel_begin eyediag pidx=0 ridx=0 cidx=0 topname=0 npos=66 spath=name+file eye_plot=fold eye_mask=off eye_shift=0e+00 eye_auto=true} \
+            {  panel_end} \
+        ] \
+        footer [list \
+            {waveview_end} \
+            {browserOpened} \
+        ] \
+    ]
+}
+
+# Where this run's templates come from, most specific first:
+#   session_template  a saved .sx to lift the panel from
+#   sx_header / sx_panel / sx_empty / sx_footer  overrides in the config
+#   otherwise the built-ins above
+proc sess::templates {cfg} {
+    if {[dict exists $cfg session_template]} {
+        set t [dict get $cfg session_template]
+        if {$t ne "" && [file readable $t]} {
+            eye::log "panel template: $t"
+            return [sess::parse_reference $t]
+        }
+    }
+    set ref [sess::builtin]
+    set over {}
+    foreach {k part} {sx_header header sx_panel panel sx_empty empty sx_footer footer} {
+        if {[dict exists $cfg $k]} { dict set ref $part [dict get $cfg $k]; lappend over $k }
+    }
+    if {[llength $over]} {
+        eye::log "panel template: built-in, overridden by [join $over {, }]"
+    } else {
+        eye::log "panel template: built-in"
+    }
+    return $ref
+}
+
+# --------------------------------------------------------------------------
 # Split a reference .sx into header / eye panel / empty panel / footer.
 # --------------------------------------------------------------------------
 proc sess::parse_reference {path} {
@@ -212,7 +269,7 @@ proc sess::panel_block {ref pidx cols cfg ctx} {
 #             holding every file, panels tagged with the matching fidx.
 # --------------------------------------------------------------------------
 proc sess::write {path cfg entries} {
-    set ref  [sess::parse_reference [dict get $cfg session_template]]
+    set ref  [sess::templates $cfg]
     set cols [dict get $cfg grid_cols]
 
     set out {}
@@ -232,7 +289,7 @@ proc sess::write {path cfg entries} {
         }
         lappend out $ln
     }
-    if {!$wdf_done} { error "reference .sx has no wdf line" }
+    if {!$wdf_done} { error "template header has no wdf line" }
 
     # Panels, in CSV column order, per file.
     set pidx 0
