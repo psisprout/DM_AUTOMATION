@@ -2,7 +2,7 @@
 # eye_lib.tcl -- shared helpers for Synopsys Custom WaveView (ACE) eye
 #                measurement in -no_gui batch mode.
 #
-# Loaded by measure_eye.tcl and by every generated replay/session script.
+# Loaded by measure_eye.tcl.
 # ---------------------------------------------------------------------------
 
 # This code uses dict, lassign, apply and {*} -- all Tcl 8.5+.  WaveView
@@ -14,14 +14,8 @@ if {[package vcompare [info patchlevel] 8.5] < 0} {
 }
 
 namespace eval eye {
-    variable SAVE_SESSION_CMD ""
-    variable CLOSE_FILE_CMD   ""
-    variable WINDOW_CMD       ""
-    variable PLOT_CMD         ""
-    variable CUR_WIN          ""
-    variable BATCH            0
-    variable PLOT_FORM        ""
-    variable PROBED           0
+    variable CLOSE_FILE_CMD ""
+    variable PROBED         0
 }
 
 # --------------------------------------------------------------------------
@@ -33,189 +27,15 @@ namespace eval eye {
 # see the full list for your build, then pin the right name here.
 # --------------------------------------------------------------------------
 proc eye::probe {} {
-    variable SAVE_SESSION_CMD
     variable CLOSE_FILE_CMD
-    variable WINDOW_CMD
-    variable PLOT_CMD
     variable PROBED
     if {$PROBED} return
-
-    foreach c {sx_save_session sx_session_save sx_save_session_file sx_session} {
-        if {[llength [info commands $c]] > 0} { set SAVE_SESSION_CMD $c; break }
-    }
     foreach c {sx_close_sim_file sx_close_file sx_close} {
         if {[llength [info commands $c]] > 0} { set CLOSE_FILE_CMD $c; break }
     }
-
-    # Display layer.  sx_create_eye only builds the data object -- in the GUI
-    # something still has to open a panel and put the curve in it, or the
-    # script completes with an empty window.  Eye-specific plotters first.
-    # sx_new_panel is what this build has; called bare it yields the default
-    # XY panel, and an eye will not render there -- eyes need an eye-diagram
-    # panel.  eye::ensure_window asks for the type explicitly.
-    foreach c {sx_new_panel sx_create_panel sx_add_panel
-               sx_create_window sx_open_window sx_new_window} {
-        if {[llength [info commands $c]] > 0} { set WINDOW_CMD $c; break }
-    }
-    # sx_display_eye confirmed present on this build (F-2011.09 era ACE); it
-    # refuses to run under -no_gui with "can't perform graphical command in
-    # batch mode", so display only ever happens in the GUI.
-    foreach c {sx_display_eye sx_plot_eye sx_show_eye sx_add_eye sx_draw_eye
-               sx_plot sx_display sx_add_curve sx_add_signal sx_show} {
-        if {[llength [info commands $c]] > 0} { set PLOT_CMD $c; break }
-    }
-
     eye::log "ACE build provides [llength [info commands sx_*]] sx_* commands"
-    eye::log "session-save command : [expr {$SAVE_SESSION_CMD eq {} ? {<not found>} : $SAVE_SESSION_CMD}]"
-    eye::log "close-file command   : [expr {$CLOSE_FILE_CMD   eq {} ? {<not found>} : $CLOSE_FILE_CMD}]"
-    eye::log "window command       : [expr {$WINDOW_CMD       eq {} ? {<not found>} : $WINDOW_CMD}]"
-    eye::log "plot command         : [expr {$PLOT_CMD         eq {} ? {<not found>} : $PLOT_CMD}]"
+    eye::log "close-file command : [expr {$CLOSE_FILE_CMD eq {} ? {<not found>} : $CLOSE_FILE_CMD}]"
     set PROBED 1
-    if {$WINDOW_CMD eq "" || $PLOT_CMD eq ""} { eye::display_hints }
-}
-
-# When the display commands could not be resolved, print every plausible
-# candidate this build does have, so the right names can be pinned rather
-# than guessed.  Run probe_ace.tcl for the full dump.
-proc eye::display_hints {} {
-    set hits {}
-    foreach c [lsort [info commands sx_*]] {
-        if {[regexp {plot|display|show|draw|add|window|panel|curve|graph|wave} $c]} {
-            lappend hits $c
-        }
-    }
-    eye::log "---- display command not resolved. candidates in this build: ----"
-    foreach c $hits { eye::log "    $c" }
-    eye::log "---- pin the right ones in eye::probe (lib/eye_lib.tcl) ----"
-}
-
-# Open (once) the window the eyes get drawn into.  Call BEFORE eye::create:
-# some builds attach a new eye to the current window at creation time.
-proc eye::ensure_window {{title "eye"}} {
-    variable WINDOW_CMD
-    variable CUR_WIN
-    variable BATCH
-    eye::probe
-    if {$CUR_WIN ne "" || $BATCH} { return $CUR_WIN }
-    if {$WINDOW_CMD eq ""} { return "" }
-
-    # An eye only renders in an eye-diagram panel, not the default XY panel,
-    # so ask for the type up front.  The exact type token is not documented
-    # here; try the plausible spellings and confirm with sx_get_panel_type.
-    set made ""
-    foreach type {eye eyediagram eye_diagram EYE Eye "eye diagram"} {
-        if {[catch {$WINDOW_CMD $type} p]} {
-            if {[eye::batch_error $p]} { return "" }
-            continue
-        }
-        if {[eye::panel_is_eye $p]} {
-            set CUR_WIN $p
-            eye::log "eye panel created: $WINDOW_CMD \"$type\" -> $p"
-            eye::set_title $p $title
-            return $p
-        }
-        # Wrong type but a panel exists -- keep the first one as a fallback.
-        if {$made eq ""} { set made $p }
-    }
-
-    # Nothing took a type argument.  Make a bare panel and try to convert it.
-    if {$made eq ""} {
-        if {[catch {$WINDOW_CMD} made]} {
-            if {[eye::batch_error $made]} { return "" }
-            eye::log "$WINDOW_CMD failed: $made"
-            return ""
-        }
-    }
-    foreach setter {sx_set_panel_y_type sx_set_panel_x_type} {
-        if {[llength [info commands $setter]] == 0} { continue }
-        foreach type {eye eyediagram eye_diagram EYE} {
-            catch {$setter $made $type}
-        }
-    }
-
-    set CUR_WIN $made
-    eye::set_title $made $title
-    if {[eye::panel_is_eye $made]} {
-        eye::log "eye panel created (type set after creation) -> $made"
-    } else {
-        eye::log "WARNING: panel $made is type '[eye::panel_type $made]', not an eye"
-        eye::log "WARNING: eyes will not render here.  Run probe_eye.tcl in the"
-        eye::log "WARNING: GUI and pin sx_new_panel's real type argument."
-    }
-    return $CUR_WIN
-}
-
-proc eye::panel_type {panel} {
-    if {[llength [info commands sx_get_panel_type]] == 0} { return "" }
-    if {[catch {sx_get_panel_type $panel} t]} { return "" }
-    return $t
-}
-
-# Unknown type token means unknown reply, so treat "could not ask" as a pass
-# and let the WARNING path above depend on an answer we actually got.
-proc eye::panel_is_eye {panel} {
-    set t [eye::panel_type $panel]
-    if {$t eq ""} { return 1 }
-    return [string match -nocase "*eye*" $t]
-}
-
-proc eye::set_title {panel title} {
-    if {[llength [info commands sx_set_panel_title]] == 0} { return }
-    catch {sx_set_panel_title $panel $title}
-}
-
-# Graphical ACE commands refuse to run under -no_gui.  Recognise that once and
-# stop retrying, so a batch run does not emit 18 identical errors.
-proc eye::batch_error {msg} {
-    variable BATCH
-    if {![string match -nocase "*batch mode*" $msg]} { return 0 }
-    if {!$BATCH} {
-        set BATCH 1
-        eye::log "graphical commands unavailable in batch mode -- skipping display."
-        eye::log "measurement is unaffected; open the replay script in the GUI to draw."
-    }
-    return 1
-}
-
-# Put a measured eye on screen.  No-op (with a warning once) when the build's
-# plot command could not be resolved.
-proc eye::show {eye {label ""}} {
-    variable PLOT_CMD
-    variable PLOT_FORM
-    variable CUR_WIN
-    variable BATCH
-    eye::probe
-    if {$PLOT_CMD eq "" || $BATCH} { return 0 }
-
-    # Argument order is not documented outside SolvNet, so try the plausible
-    # forms once, remember whichever works, and use only that one afterwards.
-    if {$PLOT_FORM ne ""} {
-        if {[catch {eval $PLOT_FORM [list $eye $CUR_WIN]} err]} {
-            eye::log "$PLOT_CMD failed for $label: $err"
-            return 0
-        }
-        return 1
-    }
-    foreach form {{eye} {win eye} {eye win}} {
-        set args {}
-        foreach tok $form {
-            lappend args [expr {$tok eq "eye" ? $eye : $CUR_WIN}]
-        }
-        if {[llength $args] > 1 && $CUR_WIN eq ""} { continue }
-        if {![catch {$PLOT_CMD {*}$args} err]} {
-            set PLOT_FORM [list apply {{cmd form e w} {
-                set a {}
-                foreach t $form { lappend a [expr {$t eq "eye" ? $e : $w}] }
-                $cmd {*}$a
-            }} $PLOT_CMD $form]
-            eye::log "display: $PLOT_CMD with args ($form)"
-            return 1
-        }
-        if {[eye::batch_error $err]} { return 0 }
-        set last $err
-    }
-    eye::log "$PLOT_CMD failed for $label (all arg forms): $last"
-    return 0
 }
 
 proc eye::log {msg} {
@@ -355,26 +175,6 @@ proc eye::best_vref {cfg eyes order sweep} {
 
 proc eye::fmt_ps   {x} { return [format "%.2f" $x] }
 proc eye::fmt_vref {x} { return [format "%.3f" $x] }
-
-# --------------------------------------------------------------------------
-# Session save.  Tries the native ACE session writer; callers should ALWAYS
-# also emit a replay script (see eye::write_replay) because a native session
-# written from -no_gui may carry no window/panel layout.
-# --------------------------------------------------------------------------
-proc eye::save_session {path} {
-    variable SAVE_SESSION_CMD
-    eye::probe
-    if {$SAVE_SESSION_CMD eq ""} {
-        eye::log "no session-save command in this build; replay script only"
-        return 0
-    }
-    if {[catch {$SAVE_SESSION_CMD $path} err]} {
-        eye::log "$SAVE_SESSION_CMD '$path' failed: $err"
-        return 0
-    }
-    eye::log "session saved: $path"
-    return 1
-}
 
 proc eye::close_file {handle} {
     variable CLOSE_FILE_CMD

@@ -59,8 +59,6 @@ longer substitute:
 [eye] WARNING: UI will keep the reference value instead.
 ```
 
-## samples/
-
-Test fixtures, not templates. `lp5x_write.sample.sx` is the same content as
-`lp5x_write.sx`; `broken_key.sample.sx` has `eye_width` deliberately malformed
-to exercise the warning path.
+**These files are load-bearing.** `lib/session.tcl` reads the one a config
+names on every run; without it that config measures and writes its CSV but
+produces no `.sx`.

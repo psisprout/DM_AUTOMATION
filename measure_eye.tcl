@@ -12,7 +12,7 @@
 #   * at each vref measure the aperture of all bits in a byte,
 #   * pick the vref whose WORST bit aperture is largest (byte-level optimum),
 #   * re-measure every bit at that vref and record it,
-#   * emit one CSV row and one replay/session script per fsdb.
+#   * emit one CSV row and one .sx session per fsdb.
 #
 # CSV columns:
 #   fsdb, <byte0 bits...>, <byte1 bits...>, vref0, vref1
@@ -20,7 +20,6 @@
 
 set SCRIPT_DIR [file dirname [file normalize [info script]]]
 source [file join $SCRIPT_DIR lib eye_lib.tcl]
-source [file join $SCRIPT_DIR lib replay.tcl]
 source [file join $SCRIPT_DIR lib session.tcl]
 
 # ---- config ---------------------------------------------------------------
@@ -127,12 +126,8 @@ foreach fsdb $fsdb_list {
     puts $csv [join $row ,]
     flush $csv
 
-    # ---- replay / session -------------------------------------------------
+    # ---- session ----------------------------------------------------------
     set stem [file rootname [file tail $fsdb]]
-    eye::write_replay \
-        [file join $OUT_DIR "${stem}_[dict get $CFG name].replay.tcl"] \
-        $CFG $fsdb $results
-
     lappend ALL_ENTRIES [list $fsdb $results]
     if {$WRITE_SESSION && [dict get $CFG session_scope] eq "per_fsdb"} {
         sess::write \
