@@ -21,6 +21,7 @@
 set SCRIPT_DIR [file dirname [file normalize [info script]]]
 source [file join $SCRIPT_DIR lib eye_lib.tcl]
 source [file join $SCRIPT_DIR lib replay.tcl]
+source [file join $SCRIPT_DIR lib session.tcl]
 
 # ---- config ---------------------------------------------------------------
 # sx_sub is a site wrapper and how it forwards argv is not guaranteed, so pick
@@ -51,6 +52,19 @@ eye::log "config: $CFG_FILE ([dict get $CFG name])"
 
 set OUT_DIR [file join $SCRIPT_DIR out]
 file mkdir $OUT_DIR
+
+# Session writing needs a real saved session as the panel template.  Without
+# one the measurement still runs; only the session files are skipped.
+set TPL [dict get $CFG session_template]
+if {[file pathtype $TPL] eq "relative"} { set TPL [file join $SCRIPT_DIR $TPL] }
+set WRITE_SESSION [file readable $TPL]
+if {$WRITE_SESSION} {
+    dict set CFG session_template $TPL
+    eye::log "session template: $TPL"
+} else {
+    eye::log "no reference session at $TPL -- skipping session output."
+    eye::log "see ref/README.md; measurement and CSV are unaffected."
+}
 
 eye::probe
 set SWEEP [eye::parse_sweep [dict get $CFG vref_sweep]]
@@ -124,6 +138,12 @@ foreach fsdb $fsdb_list {
     eye::write_replay \
         [file join $OUT_DIR "${stem}_[dict get $CFG name].replay.tcl"] \
         $CFG $fsdb $results
+
+    if {$WRITE_SESSION} {
+        sess::write \
+            [file join $OUT_DIR "${stem}_[dict get $CFG name].session"] \
+            $CFG $fsdb $results
+    }
 
     eye::close_file $fh
 }

@@ -33,6 +33,8 @@ set CFG [dict create \
     ndqs        $NDQS \
     fsdb_glob   $FSDB_GLOB \
     lib_relpath ../lib \
+    session_template ref/waveview.session \
+    grid_cols   4 \
     byte_order  {0 1} \
 ]
 

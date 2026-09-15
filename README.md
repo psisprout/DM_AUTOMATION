@@ -35,12 +35,43 @@ Outputs land in `out/`:
 | file | contents |
 |---|---|
 | `out/<cfg>_eye.csv` | `fsdb,dq0..dq7,dmi0,dq8..dq15,dmi1,vref0,vref1` |
-| `out/<fsdb>_<cfg>.replay.tcl` | standalone script that redraws the same eyes |
-| `out/<fsdb>_<cfg>.replay.session` | native session, written when the replay runs in the GUI |
+| `out/<fsdb>_<cfg>.session` | **WaveView session — 18 eyes on a 5x4 grid, at the measured vref** |
+| `out/<fsdb>_<cfg>.replay.tcl` | fallback: ACE script that redraws the eyes (see below) |
 
-To look at a result: start the GUI with `sx_sub`, then **Run ACE script** on
-`out/corner_tt_1p0v_lp5x_write.replay.tcl`. Running that replay under
-`-no_gui` re-measures but draws nothing — see below.
+The session is written directly as text during the headless measurement pass,
+so one `-no_gui` run produces both the numbers and something to open. No ACE
+display commands, no GUI scripting.
+
+Session writing needs a reference session in `ref/waveview.session` — see
+[ref/README.md](ref/README.md). Without it the measurement still runs and only
+the session output is skipped.
+
+To look at a result: `sx_sub`, then open
+`out/corner_tt_1p0v_lp5x_write.session`.
+
+## How the session is built
+
+A session is a text file, and the measurement pass already knows every signal
+name and the per-byte vref, so `lib/session.tcl` just writes one.
+
+The panel block is **not** hard coded. A real saved session is read from
+`ref/waveview.session` and its `panel_begin` / `line` / `panel_end` lines are
+reused verbatim, with only these substituted per bit:
+
+| field | value |
+|---|---|
+| `pidx` / `ridx` / `cidx` | grid position, row-major over `grid_cols` (4) |
+| `eye_ext` | `0|<differential strobe>` for that byte |
+| `em_vref` | the byte's measured vref, as mV (`0.160` -> `160m`) |
+| `eye_width` / `eye_shift` / `em_vac` | UI / phase / vac from the config |
+| `name=` on the `line` | that bit's data signal |
+
+Every other token is copied byte for byte, so anything this code does not
+understand survives untouched. If a key it means to substitute is missing from
+the reference it says so instead of silently emitting the reference value.
+
+18 eyes fill `pidx` 0..17 in CSV column order (byte 0 then byte 1); the last
+row is padded with the reference's empty panel to complete the grid.
 
 ## How the vref is chosen
 
@@ -115,6 +146,13 @@ That error text *is* the signature — it is the only such documentation
 available without SolvNet. Expect every probed command to report an error;
 that is the mechanism working, not a failure. Everything goes to the output
 file and nothing is acted on. Do not run `-usage` inside a flow that matters.
+
+## Fallback: drawing via ACE
+
+Everything below concerns the older route — having ACE draw the eyes in the
+GUI and saving a session from there. Writing the session directly replaced it.
+It is kept because it does not depend on the session file format being right;
+once the generated sessions are confirmed good it can be deleted.
 
 ### An eye needs an eye-diagram panel, not an XY panel
 
@@ -208,7 +246,14 @@ aperture model), on Tcl 8.6:
 - CSV header and column order match the required format exactly;
 - the byte-level max-min vref search matches an independent brute-force
   recomputation, bit for bit;
-- generated replay scripts execute and reproduce the CSV apertures exactly.
+- generated replay scripts execute and reproduce the CSV apertures exactly;
+- generated sessions parse back to 20 panels (18 eyes + 2 empty) with `pidx`
+  contiguous and `pidx == ridx*4 + cidx` throughout, and every panel's signal,
+  trigger and `em_vref` match the CSV row for that fsdb.
+
+Session generation was exercised against `ref/sample_from_chat.session`, which
+carries the transcription typo `eye_width-312.5p`; the generator left that
+token alone and warned rather than guessing.
 
 The `sx_*` call signatures themselves are taken from the working script this
 was built from and are unverified here.
