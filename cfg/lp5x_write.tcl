@@ -61,6 +61,24 @@ dict set CFG session_fmt [dict create \
     em_vref   milli \
 ]
 
+# --- what the .sx panel calls each thing --------------------------------------
+# session_subst maps a key in the reference panel to where its value comes
+# from.  A mask whose panel uses different field names only needs this remapped.
+dict set CFG session_subst [dict create \
+    eye_ext   trig        \
+    em_vref   vref        \
+    em_vac    cfg:vac     \
+    eye_width cfg:ui      \
+    eye_shift cfg:eye_shift \
+    eye_meas  cfg:eye_type  \
+    fidx      fidx        \
+    name      sig         \
+    attr      attr        \
+]
+
+# sx_measure_eye's argument list, %type% %vref% %vac% %ui% %shift%
+dict set CFG measure_args {type=%type% vref=%vref% vac=%vac%}
+
 # --- bytes ------------------------------------------------------------------
 # Per byte: pad instance, strobe index, bit order (also the CSV column order),
 # and optionally fidx -- which wdf index its signals come from, for sessions

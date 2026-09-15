@@ -284,11 +284,24 @@ proc eye::create {data_sig_name trig_sig ui phase {trig_edge BOTH} {trig_level 0
                 "trig_level=${trig_level}"]
 }
 
-# Measure one eye at a FIXED vref (no ddr4_vref_sweep -- the byte-level sweep
-# is driven by eye::best_vref below) and return the aperture in ps.
+# The sx_measure_eye argument list comes from the config, because it is not
+# the same for every mask: a rectangular ddr4 measurement and a hexagonal one
+# do not take the same fields.  Placeholders: %type% %vref% %vac% %ui% %shift%
+proc eye::measure_args {cfg vref} {
+    return [string map [list \
+        %type%  [dict get $cfg eye_type] \
+        %vref%  $vref \
+        %vac%   [dict get $cfg vac] \
+        %ui%    [dict get $cfg ui] \
+        %shift% [dict get $cfg eye_shift] \
+    ] [dict get $cfg measure_args]]
+}
+
+# Measure one eye at a FIXED vref (no built-in vref sweep -- the byte-level
+# sweep is driven by eye::best_vref below) and return the aperture in ps.
 # A closed eye / failed measurement yields 0.0 so it loses the max-min search.
-proc eye::aperture_ps {eye type vref vac} {
-    if {[catch {sx_measure_eye $eye type=$type vref=$vref vac=$vac} err]} {
+proc eye::aperture_ps {cfg eye vref} {
+    if {[catch {sx_measure_eye $eye {*}[eye::measure_args $cfg $vref]} err]} {
         eye::log "measure failed (vref=$vref): $err"
         return 0.0
     }
@@ -315,14 +328,14 @@ proc eye::vcent {eye} {
 # Returns: {best_vref best_min_ps {bit ps bit ps ...}}
 # best vref = the sweep point whose WORST bit aperture is the largest.
 # --------------------------------------------------------------------------
-proc eye::best_vref {eyes order sweep type vac} {
+proc eye::best_vref {cfg eyes order sweep} {
     set best_v   ""
     set best_min -1.0
 
     foreach v $sweep {
         set worst ""
         foreach bit $order {
-            set ap [eye::aperture_ps [dict get $eyes $bit] $type $v $vac]
+            set ap [eye::aperture_ps $cfg [dict get $eyes $bit] $v]
             if {$worst eq "" || $ap < $worst} { set worst $ap }
         }
         if {$worst > $best_min} {
@@ -335,7 +348,7 @@ proc eye::best_vref {eyes order sweep type vac} {
     # ones actually taken at that operating point.
     set per_bit [dict create]
     foreach bit $order {
-        dict set per_bit $bit [eye::aperture_ps [dict get $eyes $bit] $type $best_v $vac]
+        dict set per_bit $bit [eye::aperture_ps $cfg [dict get $eyes $bit] $best_v]
     }
     return [list $best_v $best_min $per_bit]
 }

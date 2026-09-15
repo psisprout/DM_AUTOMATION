@@ -65,6 +65,8 @@ one). No code changes.
 | `byte_order` + `bytes` | how many bytes, which bits, which pad instance and strobe index — and the CSV column order |
 | `session_template` `grid_cols` `session_scope` | `.sx` output |
 | `session_fmt` | how each `.sx` field is written (see below) |
+| `session_subst` | **which panel key holds which value** |
+| `measure_args` | **the `sx_measure_eye` argument list** |
 
 Signal names are format strings rather than code, so a different netlist
 convention is a config edit:
@@ -76,6 +78,28 @@ dict set CFG strobe_fmt {v(%prefix%_%pdqs%%idx%,%prefix%_%ndqs%%idx%)}
 
 `%prefix%` is the byte's `pad_prefix`, `%bit%` the bit name, `%idx%` its strobe
 index, `%pdqs%`/`%ndqs%` the strobe p/n roots.
+
+### Masks other than rectangular
+
+A hexagonal-mask measurement (CA, typically) does not take the same
+`sx_measure_eye` arguments as the rectangular `ddr4` one, and its `.sx` panel
+does not carry the same field names. Both are config data:
+
+```tcl
+dict set CFG measure_args {type=%type% vref=%vref% vac=%vac%}
+dict set CFG session_subst [dict create em_vref vref  em_vac cfg:vac  ...]
+```
+
+`measure_args` is the literal argument list, over `%type% %vref% %vac% %ui%
+%shift%`. `session_subst` maps a key **in that protocol's reference panel** to
+where its value comes from — `vref`, `trig`, `sig`, `fidx`, `attr`, or
+`cfg:<key>` for any config value. If the hexagonal panel calls it `hex_vref`,
+rename the key; a key that is not in the panel is reported at startup rather
+than silently dropped.
+
+`cfg/lp5x_ca.tcl` is a skeleton for this, with the two spots to fill marked.
+Diff that protocol's reference `.sx` against `ref/lp5x_write.sx` to see which
+fields actually changed.
 
 ## How the session is built
 
@@ -307,8 +331,14 @@ aperture model), on Tcl 8.6:
 - changing a config's `eye_type` moves `eye_meas=` in the generated `.sx` with
   it, so the session's mask type cannot drift from the measurement's.
 
-Every token of the reference panel is accounted for — 11 substituted, the rest
-copied verbatim.
+Every token of the LP5x reference panel is accounted for — 11 substituted, the
+rest copied verbatim.
+
+Also verified for the config-driven substitution: renaming `em_vref` to
+`hex_vref` and `eye_meas` to `hex_mask` in both the reference panel and
+`session_subst` carries the values through unchanged; leaving `session_subst`
+pointing at a key the panel lacks reports it; and `.sx` output for the existing
+configs is byte-identical to before the change.
 
 The `sx_*` call signatures themselves are taken from the working script this
 was built from and are unverified here.

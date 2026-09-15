@@ -153,27 +153,54 @@ proc sess::kv! {linevar key val {ctx ""}} {
 # --------------------------------------------------------------------------
 # One panel block for one bit of one file.
 # --------------------------------------------------------------------------
-proc sess::panel_block {ref pidx cols fidx data_sig trig_sig vref cfg bit_idx} {
+# Resolve one substitution source to a value.
+#   vref      the byte's measured vref        trig  <fidx>|<strobe>
+#   sig       the bit's data signal           fidx  source file index
+#   attr      cycled trace colour             cfg:<key>  a config value
+proc sess::resolve {src cfg ctx line} {
+    if {[string match "cfg:*" $src]} { return [dict get $cfg [string range $src 4 end]] }
+    switch -- $src {
+        trig { return "[dict get $ctx fidx]|[dict get $ctx trig]" }
+        attr { return [sess::fmt_attr $cfg [dict get $ctx bit_idx] [sess::get_kv $line attr]] }
+        default { return [dict get $ctx $src] }
+    }
+}
+
+# --------------------------------------------------------------------------
+# One panel block for one bit.  Which keys get substituted is config data
+# (session_subst), not code: a hexagonal-mask panel does not carry the same
+# fields as a rectangular one, and renaming the key there is enough.
+# --------------------------------------------------------------------------
+proc sess::panel_block {ref pidx cols cfg ctx} {
+    variable WARNED
     set out {}
+    set hit [dict create]
+
     foreach ln [dict get $ref panel] {
         set t [string trim $ln]
-        if {[string match "panel_begin*" $t]} {
-            sess::kv! ln pidx      $pidx
-            sess::kv! ln ridx      [expr {$pidx / $cols}]
-            sess::kv! ln cidx      [expr {$pidx % $cols}]
-            sess::kv! ln eye_ext   "$fidx|$trig_sig"                     "the trigger signal"
-            sess::kv! ln em_vref   [sess::fmt $cfg em_vref   $vref]      "vref"
-            sess::kv! ln eye_width [sess::fmt $cfg eye_width [dict get $cfg ui]]        "UI"
-            sess::kv! ln eye_shift [sess::fmt $cfg eye_shift [dict get $cfg eye_shift]] "the eye shift"
-            sess::kv! ln em_vac    [sess::fmt $cfg em_vac    [dict get $cfg vac]]       "vac"
-            sess::kv! ln eye_meas  [dict get $cfg eye_type]  "the mask type"
-        } elseif {[regexp {^line\s} $t]} {
-            sess::kv! ln fidx $fidx
-            sess::kv! ln name $data_sig "the data signal"
-            sess::kv! ln attr [sess::fmt_attr $cfg $bit_idx [sess::get_kv $ln attr]] \
-                "the trace colour"
+        set is_panel [string match "panel_begin*" $t]
+        set is_line  [regexp {^line\s} $t]
+
+        if {$is_panel} {
+            # Grid position is structural, not configurable.
+            sess::kv! ln pidx $pidx
+            sess::kv! ln ridx [expr {$pidx / $cols}]
+            sess::kv! ln cidx [expr {$pidx % $cols}]
+        }
+        if {$is_panel || $is_line} {
+            foreach {key src} [dict get $cfg session_subst] {
+                set val [sess::fmt $cfg $key [sess::resolve $src $cfg $ctx $ln]]
+                lassign [sess::kv $ln $key $val] ln ok
+                if {$ok} { dict set hit $key 1 }
+            }
         }
         lappend out $ln
+    }
+
+    foreach {key src} [dict get $cfg session_subst] {
+        if {[dict exists $hit $key] || [dict exists $WARNED $key]} { continue }
+        dict set WARNED $key 1
+        eye::log "WARNING: '$key=' not in the reference .sx panel; '$src' not applied."
     }
     return $out
 }
@@ -217,8 +244,9 @@ proc sess::write {path cfg entries} {
             set vref [dict get $results $b vref]
             set bit_idx 0
             foreach bit [dict get $cfg bytes $b bits] {
-                foreach ln [sess::panel_block $ref $pidx $cols $fidx \
-                                [eye::data_sig $cfg $b $bit] $trig $vref $cfg $bit_idx] {
+                set ctx [dict create vref $vref trig $trig fidx $fidx \
+                             sig [eye::data_sig $cfg $b $bit] bit_idx $bit_idx]
+                foreach ln [sess::panel_block $ref $pidx $cols $cfg $ctx] {
                     lappend out $ln
                 }
                 incr pidx

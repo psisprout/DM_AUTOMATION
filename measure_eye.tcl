@@ -109,9 +109,7 @@ foreach fsdb $fsdb_list {
                 [dict get $CFG ui] [dict get $CFG eye_shift]]
         }
 
-        lassign [eye::best_vref $eyes $bits $SWEEP \
-                    [dict get $CFG eye_type] [dict get $CFG vac]] \
-                best_v best_min per_bit
+        lassign [eye::best_vref $CFG $eyes $bits $SWEEP] best_v best_min per_bit
 
         dict set results $b vref    [eye::fmt_vref $best_v]
         dict set results $b per_bit $per_bit
