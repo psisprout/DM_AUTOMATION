@@ -72,11 +72,37 @@ If it finds nothing it logs every plausible `sx_*` command in your build:
 ...
 ```
 
-To get the full surface including help text:
+To get the full surface:
 
 ```sh
-wv -no_gui probe_ace.tcl        # writes out/ace_commands.txt
+wv -no_gui probe_ace.tcl            # list only, invokes nothing (safe)
+wv -no_gui probe_ace.tcl -usage     # also capture signature strings (noisy)
 ```
+
+`-usage` calls each candidate with no arguments inside `catch` and records the
+error, because ACE reports these as usage strings:
+
+```
+sx_add_cursor(panel_obj,<xloc>,<option>.) ; argument type error
+```
+
+That error text *is* the signature — it is the only such documentation
+available without SolvNet. Expect every probed command to report an error;
+that is the mechanism working, not a failure. Everything goes to the output
+file and nothing is acted on. Do not run `-usage` inside a flow that matters.
+
+### Display only works in the GUI
+
+`sx_display_eye` exists on this build but refuses under `-no_gui`:
+
+```
+sx_display_eye : can't perform graphical command in batch mode
+```
+
+So the measurement pass never draws, by design, and the replay script draws
+only when opened in the GUI. `eye::batch_error` recognises that message once
+and skips the remaining display calls rather than emitting one error per bit.
+Measurement is unaffected either way.
 
 Then pin the correct names in the two `foreach` candidate lists at the top of
 `eye::probe` in `lib/eye_lib.tcl`. Nothing else has to change — the generated
@@ -134,6 +160,16 @@ aperture model), on Tcl 8.6:
 
 The `sx_*` call signatures themselves are taken from the working script this
 was built from and are unverified here.
+
+`eye::show` does not know `sx_display_eye`'s argument order, so it tries
+`(eye)`, `(window, eye)` and `(eye, window)` once, logs whichever succeeds, and
+reuses only that form. All three paths plus the batch-mode skip are covered by
+the stub tests.
+
+The code requires **Tcl 8.5+** (`dict`, `lassign`, `apply`, `{*}`). Older
+WaveView builds embed 8.4, where those are syntax errors; `lib/eye_lib.tcl`
+checks `info patchlevel` up front and fails with a readable message rather than
+a parse error. `out/ace_commands.txt` records the interpreter version.
 
 ## Notes on the original snippet
 

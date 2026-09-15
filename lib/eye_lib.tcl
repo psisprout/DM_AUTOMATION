@@ -5,12 +5,22 @@
 # Loaded by measure_eye.tcl and by every generated replay/session script.
 # ---------------------------------------------------------------------------
 
+# This code uses dict, lassign, apply and {*} -- all Tcl 8.5+.  WaveView
+# embeds its own interpreter and older builds ship 8.4, where every one of
+# those is a syntax error.  Fail with a readable message instead.
+if {[package vcompare [info patchlevel] 8.5] < 0} {
+    error "eye_lib requires Tcl 8.5+; this WaveView embeds [info patchlevel].\
+           Report the version and the flow can be rewritten for 8.4."
+}
+
 namespace eval eye {
     variable SAVE_SESSION_CMD ""
     variable CLOSE_FILE_CMD   ""
     variable WINDOW_CMD       ""
     variable PLOT_CMD         ""
     variable CUR_WIN          ""
+    variable BATCH            0
+    variable PLOT_FORM        ""
     variable PROBED           0
 }
 
@@ -44,7 +54,10 @@ proc eye::probe {} {
                sx_create_panel sx_add_panel sx_new_panel} {
         if {[llength [info commands $c]] > 0} { set WINDOW_CMD $c; break }
     }
-    foreach c {sx_plot_eye sx_display_eye sx_show_eye sx_add_eye sx_draw_eye
+    # sx_display_eye confirmed present on this build (F-2011.09 era ACE); it
+    # refuses to run under -no_gui with "can't perform graphical command in
+    # batch mode", so display only ever happens in the GUI.
+    foreach c {sx_display_eye sx_plot_eye sx_show_eye sx_add_eye sx_draw_eye
                sx_plot sx_display sx_add_curve sx_add_signal sx_show} {
         if {[llength [info commands $c]] > 0} { set PLOT_CMD $c; break }
     }
@@ -78,12 +91,15 @@ proc eye::display_hints {} {
 proc eye::ensure_window {{title "eye"}} {
     variable WINDOW_CMD
     variable CUR_WIN
+    variable BATCH
     eye::probe
-    if {$CUR_WIN ne ""} { return $CUR_WIN }
+    if {$CUR_WIN ne "" || $BATCH} { return $CUR_WIN }
     if {$WINDOW_CMD eq ""} { return "" }
     if {[catch {$WINDOW_CMD} w]} {
+        if {[eye::batch_error $w]} { return "" }
         # Some builds want a type/title argument.
         if {[catch {$WINDOW_CMD $title} w]} {
+            if {[eye::batch_error $w]} { return "" }
             eye::log "$WINDOW_CMD failed: $w"
             return ""
         }
@@ -93,17 +109,58 @@ proc eye::ensure_window {{title "eye"}} {
     return $w
 }
 
+# Graphical ACE commands refuse to run under -no_gui.  Recognise that once and
+# stop retrying, so a batch run does not emit 18 identical errors.
+proc eye::batch_error {msg} {
+    variable BATCH
+    if {![string match -nocase "*batch mode*" $msg]} { return 0 }
+    if {!$BATCH} {
+        set BATCH 1
+        eye::log "graphical commands unavailable in batch mode -- skipping display."
+        eye::log "measurement is unaffected; open the replay script in the GUI to draw."
+    }
+    return 1
+}
+
 # Put a measured eye on screen.  No-op (with a warning once) when the build's
 # plot command could not be resolved.
 proc eye::show {eye {label ""}} {
     variable PLOT_CMD
+    variable PLOT_FORM
+    variable CUR_WIN
+    variable BATCH
     eye::probe
-    if {$PLOT_CMD eq ""} { return 0 }
-    if {[catch {$PLOT_CMD $eye} err]} {
-        eye::log "$PLOT_CMD failed for $label: $err"
-        return 0
+    if {$PLOT_CMD eq "" || $BATCH} { return 0 }
+
+    # Argument order is not documented outside SolvNet, so try the plausible
+    # forms once, remember whichever works, and use only that one afterwards.
+    if {$PLOT_FORM ne ""} {
+        if {[catch {eval $PLOT_FORM [list $eye $CUR_WIN]} err]} {
+            eye::log "$PLOT_CMD failed for $label: $err"
+            return 0
+        }
+        return 1
     }
-    return 1
+    foreach form {{eye} {win eye} {eye win}} {
+        set args {}
+        foreach tok $form {
+            lappend args [expr {$tok eq "eye" ? $eye : $CUR_WIN}]
+        }
+        if {[llength $args] > 1 && $CUR_WIN eq ""} { continue }
+        if {![catch {$PLOT_CMD {*}$args} err]} {
+            set PLOT_FORM [list apply {{cmd form e w} {
+                set a {}
+                foreach t $form { lappend a [expr {$t eq "eye" ? $e : $w}] }
+                $cmd {*}$a
+            }} $PLOT_CMD $form]
+            eye::log "display: $PLOT_CMD with args ($form)"
+            return 1
+        }
+        if {[eye::batch_error $err]} { return 0 }
+        set last $err
+    }
+    eye::log "$PLOT_CMD failed for $label (all arg forms): $last"
+    return 0
 }
 
 proc eye::log {msg} {
