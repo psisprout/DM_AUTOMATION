@@ -162,58 +162,17 @@ all 41 sweep points — rebuilding it per point would re-slice the waveform 41x.
 ## Layout
 
 ```
-measure_eye.tcl      driver: glob -> sweep -> CSV -> replay script
+measure_eye.tcl      driver: glob -> vref sweep -> CSV -> .sx
 lib/eye_lib.tcl      sweep parsing, signal naming, eye create/measure/query
-lib/replay.tcl       replay + session script generation
-cfg/lp5x_write.tcl   LP5x write setup (UI, phase, vac, sweep, pad prefixes, bits)
-cfg/nand_read.tcl    NAND read setup — placeholder values, fill in before use
+lib/session.tcl      .sx generation from a reference panel
+cfg/lp5x_write.tcl   LP5x write
+cfg/nand_read.tcl    NAND read     - template, fill in before use
+cfg/lp5x_ca.tcl      LP5x CA       - hexagonal-mask skeleton, see below
+ref/<config>.sx      panel template per protocol; read on every run
 ```
 
-Adding a case = adding a file under `cfg/`. The driver is protocol-agnostic.
-
-## Script runs, "Tcl script done", but the window is empty
-
-`sx_create_eye` builds the eye **data object**; `sx_measure_eye` reads numbers
-off it. Neither one puts a curve in a panel. Headless measurement needs
-nothing more, which is why `-no_gui` works — but in the GUI the object is
-created in memory and never drawn, so the script completes cleanly with a
-blank window. Two calls are missing: open a panel, and plot the eye into it.
-
-Their names vary by build, so `eye::probe` resolves them at run time from a
-candidate list and `eye::ensure_window` / `eye::show` use whatever it found.
-If it finds nothing it logs every plausible `sx_*` command in your build:
-
-```
-[eye] window command       : <not found>
-[eye] plot command         : <not found>
-[eye] ---- display command not resolved. candidates in this build: ----
-[eye]     sx_add_curve
-[eye]     sx_create_window
-...
-```
-
-To get the full surface:
-
-```sh
-sx_sub -no_gui probe_ace.tcl            # list only, invokes nothing (safe)
-sx_sub -no_gui probe_ace.tcl -usage     # also capture signature strings (noisy)
-```
-
-Worth running `-usage` from the GUI as well (**Run ACE script**): there the
-graphical commands report their real signatures instead of refusing with
-"batch mode".
-
-`-usage` calls each candidate with no arguments inside `catch` and records the
-error, because ACE reports these as usage strings:
-
-```
-sx_add_cursor(panel_obj,<xloc>,<option>.) ; argument type error
-```
-
-That error text *is* the signature — it is the only such documentation
-available without SolvNet. Expect every probed command to report an error;
-that is the mechanism working, not a failure. Everything goes to the output
-file and nothing is acted on. Do not run `-usage` inside a flow that matters.
+Adding a case = a file under `cfg/` plus its `ref/*.sx`. The driver carries no
+protocol knowledge.
 
 ## What was verified
 
