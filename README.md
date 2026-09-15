@@ -6,12 +6,31 @@ FSDB.
 
 ## Run
 
+Everything goes through the site wrapper `sx_sub`:
+
+| | |
+|---|---|
+| `sx_sub -no_gui <script>` | headless — measurement only, draws nothing |
+| `sx_sub` | opens the WaveView GUI; load a script via **Run ACE script** |
+
 ```sh
-wv -no_gui measure_eye.tcl cfg/lp5x_write.tcl     # LP5x write
-wv -no_gui measure_eye.tcl cfg/nand_read.tcl      # NAND read (template)
+sx_sub -no_gui measure_eye.tcl cfg/lp5x_write.tcl     # LP5x write
+sx_sub -no_gui measure_eye.tcl cfg/nand_read.tcl      # NAND read (template)
 ```
 
-Run it from the directory holding the `.fsdb` files. Outputs land in `out/`:
+Run it from the directory holding the `.fsdb` files. If the wrapper does not
+forward arguments, pass the config by environment instead:
+
+```sh
+DM_EYE_CFG=cfg/lp5x_write.tcl sx_sub -no_gui measure_eye.tcl
+```
+
+`measure_eye.tcl` does not trust argument position — it takes the first argv
+entry that is a readable file other than itself, so an added `-no_gui` or a
+repeated script name does no harm. The resolved config is echoed as
+`[eye] config: ...` on startup.
+
+Outputs land in `out/`:
 
 | file | contents |
 |---|---|
@@ -19,7 +38,9 @@ Run it from the directory holding the `.fsdb` files. Outputs land in `out/`:
 | `out/<fsdb>_<cfg>.replay.tcl` | standalone script that redraws the same eyes |
 | `out/<fsdb>_<cfg>.replay.session` | native session, written when the replay runs in the GUI |
 
-To look at a result: `wv out/corner_tt_1p0v_lp5x_write.replay.tcl`
+To look at a result: start the GUI with `sx_sub`, then **Run ACE script** on
+`out/corner_tt_1p0v_lp5x_write.replay.tcl`. Running that replay under
+`-no_gui` re-measures but draws nothing — see below.
 
 ## How the vref is chosen
 
@@ -75,9 +96,13 @@ If it finds nothing it logs every plausible `sx_*` command in your build:
 To get the full surface:
 
 ```sh
-wv -no_gui probe_ace.tcl            # list only, invokes nothing (safe)
-wv -no_gui probe_ace.tcl -usage     # also capture signature strings (noisy)
+sx_sub -no_gui probe_ace.tcl            # list only, invokes nothing (safe)
+sx_sub -no_gui probe_ace.tcl -usage     # also capture signature strings (noisy)
 ```
+
+Worth running `-usage` from the GUI as well (**Run ACE script**): there the
+graphical commands report their real signatures instead of refusing with
+"batch mode".
 
 `-usage` calls each candidate with no arguments inside `catch` and records the
 error, because ACE reports these as usage strings:

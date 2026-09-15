@@ -17,8 +17,10 @@ proc eye::write_replay {path cfg fsdb results} {
 #   source fsdb : @FSDB@
 #   generated   : @DATE@
 #   config      : @CFGNAME@
-# Open in the WaveView GUI to redraw the measured eyes, e.g.
-#   wv -k @BASENAME@
+# Redraw the measured eyes:  start the GUI with  sx_sub  (no -no_gui), then
+#   Run ACE script  ->  @BASENAME@
+# Under -no_gui the eyes are still measured but nothing is drawn: ACE refuses
+# graphical commands in batch mode.
 # =========================================================================
 
 set LIBDIR [file join [file dirname [file normalize [info script]]] @LIBREL@]

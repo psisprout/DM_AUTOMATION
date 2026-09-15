@@ -2,8 +2,11 @@
 # ===========================================================================
 # probe_ace.tcl -- dump this WaveView build's ACE command surface.
 #
-#   wv -no_gui probe_ace.tcl              list only, invokes nothing (safe)
-#   wv -no_gui probe_ace.tcl -usage       also capture usage strings
+#   sx_sub -no_gui probe_ace.tcl          list only, invokes nothing (safe)
+#   sx_sub -no_gui probe_ace.tcl -usage   also capture usage strings
+#
+# Run it from the GUI too (Run ACE script): the graphical commands report
+# their real signatures there instead of "batch mode".
 #
 # -usage calls each candidate with NO arguments inside catch and records the
 # resulting error.  ACE reports these as usage strings, e.g.

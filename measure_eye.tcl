@@ -2,7 +2,10 @@
 # ===========================================================================
 # measure_eye.tcl -- batch eye measurement for Synopsys Custom WaveView
 #
-#   wv -no_gui measure_eye.tcl cfg/lp5x_write.tcl
+#   sx_sub -no_gui measure_eye.tcl cfg/lp5x_write.tcl
+#
+# If the wrapper does not forward arguments, set the config via the
+# environment instead:  DM_EYE_CFG=cfg/lp5x_write.tcl sx_sub -no_gui measure_eye.tcl
 #
 # For every *.fsdb in the working directory:
 #   * sweep vref over the configured range,
@@ -20,8 +23,23 @@ source [file join $SCRIPT_DIR lib eye_lib.tcl]
 source [file join $SCRIPT_DIR lib replay.tcl]
 
 # ---- config ---------------------------------------------------------------
-if {[info exists argv] && [llength $argv] > 0} {
-    set CFG_FILE [lindex $argv 0]
+# sx_sub is a site wrapper and how it forwards argv is not guaranteed, so pick
+# the first argument that is actually a readable file other than this script,
+# rather than trusting position.
+proc cfg_from_argv {} {
+    if {![info exists ::argv]} { return "" }
+    set self [file normalize [info script]]
+    foreach a $::argv {
+        if {[string match "-*" $a]}              { continue }
+        if {![file readable $a]}                 { continue }
+        if {[file normalize $a] eq $self}        { continue }
+        return $a
+    }
+    return ""
+}
+
+if {[set _c [cfg_from_argv]] ne ""} {
+    set CFG_FILE $_c
 } elseif {[info exists env(DM_EYE_CFG)]} {
     set CFG_FILE $env(DM_EYE_CFG)
 } else {
