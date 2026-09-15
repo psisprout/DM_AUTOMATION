@@ -46,15 +46,16 @@ With `session_scope all_fsdb` the per-fsdb files are replaced by a single
 `out/<cfg>.sx` holding every fsdb as `wdf 0,1,2...`, each panel tagged with the
 matching `fidx`.
 
-Session writing needs a reference `.sx` per protocol — see
-[ref/README.md](ref/README.md). Without it the measurement still runs and only
-the `.sx` output is skipped.
+Panel templates ship in `ref/` — nothing needs to be supplied. To bake in
+colours or mask settings tuned in the GUI, save a session over
+`ref/<config name>.sx`; see [ref/README.md](ref/README.md).
 
 To look at a result: `sx_sub`, then open `out/corner_tt_1p0v_lp5x_write.sx`.
 
 ## Adding a protocol
 
-A protocol is a file in `cfg/` plus its own reference `.sx`. No code changes.
+A protocol is a file in `cfg/` plus its own reference `.sx` (copy an existing
+one). No code changes.
 `cfg/nand_read.tcl` is a filled-in skeleton to copy. What a config owns:
 
 | | |
