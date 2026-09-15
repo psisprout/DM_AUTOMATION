@@ -51,6 +51,42 @@ cfg/nand_read.tcl    NAND read setup — placeholder values, fill in before use
 
 Adding a case = adding a file under `cfg/`. The driver is protocol-agnostic.
 
+## Script runs, "Tcl script done", but the window is empty
+
+`sx_create_eye` builds the eye **data object**; `sx_measure_eye` reads numbers
+off it. Neither one puts a curve in a panel. Headless measurement needs
+nothing more, which is why `-no_gui` works — but in the GUI the object is
+created in memory and never drawn, so the script completes cleanly with a
+blank window. Two calls are missing: open a panel, and plot the eye into it.
+
+Their names vary by build, so `eye::probe` resolves them at run time from a
+candidate list and `eye::ensure_window` / `eye::show` use whatever it found.
+If it finds nothing it logs every plausible `sx_*` command in your build:
+
+```
+[eye] window command       : <not found>
+[eye] plot command         : <not found>
+[eye] ---- display command not resolved. candidates in this build: ----
+[eye]     sx_add_curve
+[eye]     sx_create_window
+...
+```
+
+To get the full surface including help text:
+
+```sh
+wv -no_gui probe_ace.tcl        # writes out/ace_commands.txt
+```
+
+Then pin the correct names in the two `foreach` candidate lists at the top of
+`eye::probe` in `lib/eye_lib.tcl`. Nothing else has to change — the generated
+replay scripts already call `eye::ensure_window` before creating any eye and
+`eye::show` after each measurement.
+
+The window is opened **before** the first `sx_create_eye` on purpose: if a
+build attaches new eyes to the current window at creation time, opening it
+afterwards draws nothing.
+
 ## Confirm these against your WaveView build
 
 Three things could not be verified here (no WaveView install in this

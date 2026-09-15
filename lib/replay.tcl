@@ -32,6 +32,11 @@ set EYE_TYPE  "@TYPE@"
 
 set fh [sx_open_sim_file_read $FSDB]
 
+# Open the panel BEFORE creating any eye: sx_create_eye only builds the data
+# object, and some builds attach a new eye to the current window at creation
+# time.  Without this the script completes silently with an empty window.
+eye::ensure_window "@CFGNAME@ @FSDBTAIL@"
+
 @BYTES@
 
 # Persist a native WaveView session too, now that windows/panels exist.
@@ -56,7 +61,7 @@ eye::save_session "@SESSION@"
             set ps   [eye::fmt_ps [dict get $results $b per_bit $bit]]
             append bytes "set eye_$bit \[eye::create \"$dsig\" \$trig$b \$UI_VALUE \$EYE_SHIFT\]\n"
             append bytes "sx_measure_eye \$eye_$bit type=\$EYE_TYPE vref=\$VREF$b vac=\$VAC_VALUE\n"
-            append bytes "# measured aperture: $ps ps\n"
+            append bytes "eye::show \$eye_$bit \"$bit\"    ;# measured aperture: $ps ps\n"
         }
         append bytes "\n"
     }
@@ -66,6 +71,7 @@ eye::save_session "@SESSION@"
         @FSDB@     $fsdb \
         @DATE@     [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"] \
         @CFGNAME@  [dict get $cfg name] \
+        @FSDBTAIL@ [file tail $fsdb] \
         @BASENAME@ [file tail $path] \
         @LIBREL@   [dict get $cfg lib_relpath] \
         @UI@       [dict get $cfg ui] \

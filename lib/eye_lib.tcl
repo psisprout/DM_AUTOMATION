@@ -8,6 +8,9 @@
 namespace eval eye {
     variable SAVE_SESSION_CMD ""
     variable CLOSE_FILE_CMD   ""
+    variable WINDOW_CMD       ""
+    variable PLOT_CMD         ""
+    variable CUR_WIN          ""
     variable PROBED           0
 }
 
@@ -22,6 +25,8 @@ namespace eval eye {
 proc eye::probe {} {
     variable SAVE_SESSION_CMD
     variable CLOSE_FILE_CMD
+    variable WINDOW_CMD
+    variable PLOT_CMD
     variable PROBED
     if {$PROBED} return
 
@@ -32,10 +37,73 @@ proc eye::probe {} {
         if {[llength [info commands $c]] > 0} { set CLOSE_FILE_CMD $c; break }
     }
 
+    # Display layer.  sx_create_eye only builds the data object -- in the GUI
+    # something still has to open a panel and put the curve in it, or the
+    # script completes with an empty window.  Eye-specific plotters first.
+    foreach c {sx_create_window sx_open_window sx_new_window sx_add_window
+               sx_create_panel sx_add_panel sx_new_panel} {
+        if {[llength [info commands $c]] > 0} { set WINDOW_CMD $c; break }
+    }
+    foreach c {sx_plot_eye sx_display_eye sx_show_eye sx_add_eye sx_draw_eye
+               sx_plot sx_display sx_add_curve sx_add_signal sx_show} {
+        if {[llength [info commands $c]] > 0} { set PLOT_CMD $c; break }
+    }
+
     eye::log "ACE build provides [llength [info commands sx_*]] sx_* commands"
     eye::log "session-save command : [expr {$SAVE_SESSION_CMD eq {} ? {<not found>} : $SAVE_SESSION_CMD}]"
     eye::log "close-file command   : [expr {$CLOSE_FILE_CMD   eq {} ? {<not found>} : $CLOSE_FILE_CMD}]"
+    eye::log "window command       : [expr {$WINDOW_CMD       eq {} ? {<not found>} : $WINDOW_CMD}]"
+    eye::log "plot command         : [expr {$PLOT_CMD         eq {} ? {<not found>} : $PLOT_CMD}]"
     set PROBED 1
+    if {$WINDOW_CMD eq "" || $PLOT_CMD eq ""} { eye::display_hints }
+}
+
+# When the display commands could not be resolved, print every plausible
+# candidate this build does have, so the right names can be pinned rather
+# than guessed.  Run probe_ace.tcl for the full dump.
+proc eye::display_hints {} {
+    set hits {}
+    foreach c [lsort [info commands sx_*]] {
+        if {[regexp {plot|display|show|draw|add|window|panel|curve|graph|wave} $c]} {
+            lappend hits $c
+        }
+    }
+    eye::log "---- display command not resolved. candidates in this build: ----"
+    foreach c $hits { eye::log "    $c" }
+    eye::log "---- pin the right ones in eye::probe (lib/eye_lib.tcl) ----"
+}
+
+# Open (once) the window the eyes get drawn into.  Call BEFORE eye::create:
+# some builds attach a new eye to the current window at creation time.
+proc eye::ensure_window {{title "eye"}} {
+    variable WINDOW_CMD
+    variable CUR_WIN
+    eye::probe
+    if {$CUR_WIN ne ""} { return $CUR_WIN }
+    if {$WINDOW_CMD eq ""} { return "" }
+    if {[catch {$WINDOW_CMD} w]} {
+        # Some builds want a type/title argument.
+        if {[catch {$WINDOW_CMD $title} w]} {
+            eye::log "$WINDOW_CMD failed: $w"
+            return ""
+        }
+    }
+    set CUR_WIN $w
+    eye::log "window opened via $WINDOW_CMD -> $w"
+    return $w
+}
+
+# Put a measured eye on screen.  No-op (with a warning once) when the build's
+# plot command could not be resolved.
+proc eye::show {eye {label ""}} {
+    variable PLOT_CMD
+    eye::probe
+    if {$PLOT_CMD eq ""} { return 0 }
+    if {[catch {$PLOT_CMD $eye} err]} {
+        eye::log "$PLOT_CMD failed for $label: $err"
+        return 0
+    }
+    return 1
 }
 
 proc eye::log {msg} {
