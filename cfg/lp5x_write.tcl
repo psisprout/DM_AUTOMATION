@@ -45,6 +45,8 @@ dict set CFG strobe_fmt {v(%prefix%_%pdqs%%idx%,%prefix%_%ndqs%%idx%)}
 # --- session output ---------------------------------------------------------
 dict set CFG session_template ref/lp5x_write.sx
 dict set CFG grid_cols        4
+# attr= trace colour cycles 0..N-1 per byte
+dict set CFG attr_colors      8
 # per_fsdb : one .sx per fsdb (wdf 0)
 # all_fsdb : one .sx holding every fsdb as wdf 0,1,2... with matching fidx
 dict set CFG session_scope    per_fsdb

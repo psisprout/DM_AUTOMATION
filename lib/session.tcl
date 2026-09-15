@@ -68,6 +68,26 @@ proc sess::fmt {cfg key v} {
 }
 
 # --------------------------------------------------------------------------
+# Trace colour.  attr= cycles per bit within a byte as <i>:<i mod N>:1:0,
+# restarting at each byte, so byte 0 and byte 1 share the same palette:
+#   0:0:1:0  1:1:1:0 ... 7:7:1:0  8:0:1:0
+# N is attr_colors (8).  The trailing 1:0 is carried from the reference.
+# --------------------------------------------------------------------------
+proc sess::fmt_attr {cfg i ref_val} {
+    set n 8
+    if {[dict exists $cfg attr_colors]} { set n [dict get $cfg attr_colors] }
+    set tail "1:0"
+    set parts [split $ref_val :]
+    if {[llength $parts] >= 4} { set tail [join [lrange $parts 2 end] :] }
+    return "$i:[expr {$i % $n}]:$tail"
+}
+
+proc sess::get_kv {line key} {
+    if {[regexp -- "(?:^|\[ 	\])$key=(\[^ 	\]*)" $line -> v]} { return $v }
+    return ""
+}
+
+# --------------------------------------------------------------------------
 # Split a reference .sx into header / eye panel / empty panel / footer.
 # --------------------------------------------------------------------------
 proc sess::parse_reference {path} {
@@ -133,7 +153,7 @@ proc sess::kv! {linevar key val {ctx ""}} {
 # --------------------------------------------------------------------------
 # One panel block for one bit of one file.
 # --------------------------------------------------------------------------
-proc sess::panel_block {ref pidx cols fidx data_sig trig_sig vref cfg} {
+proc sess::panel_block {ref pidx cols fidx data_sig trig_sig vref cfg bit_idx} {
     set out {}
     foreach ln [dict get $ref panel] {
         set t [string trim $ln]
@@ -149,6 +169,8 @@ proc sess::panel_block {ref pidx cols fidx data_sig trig_sig vref cfg} {
         } elseif {[regexp {^line\s} $t]} {
             sess::kv! ln fidx $fidx
             sess::kv! ln name $data_sig "the data signal"
+            sess::kv! ln attr [sess::fmt_attr $cfg $bit_idx [sess::get_kv $ln attr]] \
+                "the trace colour"
         }
         lappend out $ln
     }
@@ -192,12 +214,14 @@ proc sess::write {path cfg entries} {
         foreach b [dict get $cfg byte_order] {
             set trig [eye::strobe_sig $cfg $b]
             set vref [dict get $results $b vref]
+            set bit_idx 0
             foreach bit [dict get $cfg bytes $b bits] {
                 foreach ln [sess::panel_block $ref $pidx $cols $fidx \
-                                [eye::data_sig $cfg $b $bit] $trig $vref $cfg] {
+                                [eye::data_sig $cfg $b $bit] $trig $vref $cfg $bit_idx] {
                     lappend out $ln
                 }
                 incr pidx
+                incr bit_idx
             }
         }
         incr fidx

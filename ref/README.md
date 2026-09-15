@@ -18,9 +18,26 @@ verbatim and substitutes only what must vary per bit:
 | `em_vref` | that byte's measured vref |
 | `eye_width` / `eye_shift` / `em_vac` | UI / phase / vac from the config |
 | `fidx` and `name=` on the `line` | source file index and the bit's signal |
+| `attr=` on the `line` | trace colour, cycled per bit (see below) |
 
-Everything else is copied byte for byte, so mask settings, colours and any
-token this code does not model pass straight through.
+Everything else is copied byte for byte, so mask settings and any token this
+code does not model pass straight through.
+
+Indentation is two spaces per level (`panel_begin` at 2, `line` at 4), not
+tabs.
+
+## Trace colour
+
+`attr=` cycles per bit within a byte and restarts at each byte, so byte 0 and
+byte 1 share the palette:
+
+```
+0:0:1:0  1:1:1:0  2:2:1:0 ... 7:7:1:0  8:0:1:0
+```
+
+First field is the bit's index in its byte, second the colour, wrapping at
+`attr_colors` (8). The remaining fields are carried from the reference, so
+changing `1:0` there changes it everywhere.
 
 ## One token to eyeball
 

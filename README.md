@@ -93,6 +93,7 @@ reused verbatim, with only these substituted per bit:
 | `em_vref` | the byte's measured vref |
 | `eye_width` / `eye_shift` / `em_vac` | UI / phase / vac from the config |
 | `fidx` and `name=` on the `line` | source file index and the bit's signal |
+| `attr=` on the `line` | trace colour, `<i>:<i mod attr_colors>:...`, cycled per byte |
 
 Every other token is copied byte for byte, so mask settings, colours and
 anything this code does not model survive untouched. If a key it means to
@@ -299,7 +300,9 @@ aperture model), on Tcl 8.6:
 - swapping to `cfg/nand_read.tcl` changes bit count, CSV header, strobe naming
   and UI with no code change;
 - against a fixture whose `eye_width` key is malformed, the generator leaves
-  the token alone and warns rather than guessing.
+  the token alone and warns rather than guessing;
+- `attr=` comes out as `0:0:1:0 .. 7:7:1:0 8:0:1:0` for each byte, output
+  carries no tabs, and `line src=` / `attr=` are spelled as in the format.
 
 The `sx_*` call signatures themselves are taken from the working script this
 was built from and are unverified here.
