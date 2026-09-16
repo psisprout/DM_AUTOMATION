@@ -6,29 +6,44 @@ FSDB.
 
 ## Run
 
-Everything goes through the site wrapper `sx_sub`:
-
-| | |
-|---|---|
-| `sx_sub -no_gui <script>` | headless — measurement only, draws nothing |
-| `sx_sub` | opens the WaveView GUI; load a script via **Run ACE script** |
+Run from the directory holding the `.fsdb` files. The config must be named
+explicitly — there is no default, because measuring with the wrong protocol
+silently is worse than stopping.
 
 ```sh
-sx_sub -no_gui measure_eye.tcl cfg/lp5x_write.tcl     # LP5x write
-sx_sub -no_gui measure_eye.tcl cfg/nand_read.tcl      # NAND read (template)
+sx_sub -no_gui measure_eye.tcl cfg/lp5x_write.tcl
 ```
 
-Run it from the directory holding the `.fsdb` files. If the wrapper does not
-forward arguments, pass the config by environment instead:
+**If `sx_sub` does not forward script arguments** (the config comes out wrong
+or the run refuses), use a launcher instead — copy `run_example.tcl` per
+protocol and change one line:
+
+```tcl
+set DM_EYE_CFG nand_read
+source [file join [file dirname [file normalize [info script]]] measure_eye.tcl]
+```
 
 ```sh
-DM_EYE_CFG=cfg/lp5x_write.tcl sx_sub -no_gui measure_eye.tcl
+sx_sub -no_gui run_nand_read.tcl
 ```
 
-`measure_eye.tcl` does not trust argument position — it takes the first argv
-entry that is a readable file other than itself, so an added `-no_gui` or a
-repeated script name does no harm. The resolved config is echoed as
-`[eye] config: ...` on startup.
+Or set the environment variable. **`VAR=value cmd` is bash syntax** — in
+csh/tcsh it is read as a command name and fails with "command not found":
+
+```csh
+setenv DM_EYE_CFG nand_read          # csh / tcsh
+```
+```sh
+export DM_EYE_CFG=nand_read          # bash / sh
+```
+
+`DM_EYE_CFG` takes a bare config name or a path. The startup log says what was
+picked and how, so a wrong config is visible immediately:
+
+```
+[eye] argv: -no_gui cfg/nand_read.tcl
+[eye] config: .../cfg/nand_read.tcl (nand_read) -- via argv
+```
 
 Outputs land in `out/`:
 

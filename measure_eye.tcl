@@ -23,31 +23,76 @@ source [file join $SCRIPT_DIR lib eye_lib.tcl]
 source [file join $SCRIPT_DIR lib session.tcl]
 
 # ---- config ---------------------------------------------------------------
-# sx_sub is a site wrapper and how it forwards argv is not guaranteed, so pick
-# the first argument that is actually a readable file other than this script,
-# rather than trusting position.
-proc cfg_from_argv {} {
-    if {![info exists ::argv]} { return "" }
-    set self [file normalize [info script]]
-    foreach a $::argv {
-        if {[string match "-*" $a]}              { continue }
-        if {![file readable $a]}                 { continue }
-        if {[file normalize $a] eq $self}        { continue }
-        return $a
+# Resolved from, in order:
+#   1. a DM_EYE_CFG variable set by a launcher script before sourcing this
+#   2. argv -- the first entry that is a readable file other than this script
+#   3. the DM_EYE_CFG environment variable
+# There is deliberately NO default: sx_sub does not necessarily forward script
+# arguments, and silently measuring with the wrong protocol is worse than
+# stopping.  Accepts a path or a bare config name ("nand_read").
+proc resolve_cfg {name} {
+    global SCRIPT_DIR
+    foreach cand [list $name [file join $SCRIPT_DIR $name] \
+                       [file join $SCRIPT_DIR cfg $name] \
+                       [file join $SCRIPT_DIR cfg $name.tcl]] {
+        if {[file readable $cand] && ![file isdirectory $cand]} { return $cand }
     }
     return ""
 }
 
-if {[set _c [cfg_from_argv]] ne ""} {
-    set CFG_FILE $_c
-} elseif {[info exists env(DM_EYE_CFG)]} {
-    set CFG_FILE $env(DM_EYE_CFG)
-} else {
-    set CFG_FILE [file join $SCRIPT_DIR cfg lp5x_write.tcl]
+proc cfg_from_argv {} {
+    global SCRIPT_DIR
+    if {![info exists ::argv]} { return "" }
+    set self [file normalize [file join $SCRIPT_DIR measure_eye.tcl]]
+    foreach a $::argv {
+        if {[string match "-*" $a]} { continue }
+        set r [resolve_cfg $a]
+        if {$r eq "" || [file normalize $r] eq $self} { continue }
+        return $r
+    }
+    return ""
 }
+
+eye::log "argv: [expr {[info exists ::argv] ? $::argv : {<unset>}}]"
+
+set CFG_FILE ""
+set CFG_FROM ""
+if {[info exists ::DM_EYE_CFG] && $::DM_EYE_CFG ne ""} {
+    set CFG_FILE [resolve_cfg $::DM_EYE_CFG]
+    set CFG_FROM "DM_EYE_CFG variable"
+}
+if {$CFG_FILE eq ""} {
+    set CFG_FILE [cfg_from_argv]
+    if {$CFG_FILE ne ""} { set CFG_FROM "argv" }
+}
+if {$CFG_FILE eq "" && [info exists env(DM_EYE_CFG)] && $env(DM_EYE_CFG) ne ""} {
+    set CFG_FILE [resolve_cfg $env(DM_EYE_CFG)]
+    set CFG_FROM "DM_EYE_CFG environment variable"
+    if {$CFG_FILE eq ""} {
+        error "DM_EYE_CFG is set to '$env(DM_EYE_CFG)' but no such config was found"
+    }
+}
+
+if {$CFG_FILE eq ""} {
+    set avail {}
+    foreach f [lsort [glob -nocomplain [file join $SCRIPT_DIR cfg *.tcl]]] {
+        lappend avail [file rootname [file tail $f]]
+    }
+    error "no config selected -- refusing to guess.\n\
+      available: [join $avail {, }]\n\
+      If sx_sub forwards script arguments:\n\
+    \    sx_sub -no_gui measure_eye.tcl cfg/nand_read.tcl\n\
+      If it does not, use a launcher script (see run_example.tcl):\n\
+    \    set DM_EYE_CFG nand_read\n\
+    \    source measure_eye.tcl\n\
+      or set the environment variable -- note csh/tcsh syntax:\n\
+    \    setenv DM_EYE_CFG nand_read        (csh/tcsh)\n\
+    \    export DM_EYE_CFG=nand_read        (bash/sh)"
+}
+
 if {![file readable $CFG_FILE]} { error "config not readable: $CFG_FILE" }
 source $CFG_FILE
-eye::log "config: $CFG_FILE ([dict get $CFG name])"
+eye::log "config: $CFG_FILE ([dict get $CFG name]) -- via $CFG_FROM"
 
 set OUT_DIR [file join $SCRIPT_DIR out]
 file mkdir $OUT_DIR
