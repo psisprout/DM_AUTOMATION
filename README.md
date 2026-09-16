@@ -28,6 +28,18 @@ adding one is a copy with nothing to edit:
 cp run_nand_read.tcl run_lp5x_read.tcl     # uses cfg/lp5x_read.tcl
 ```
 
+**Keep launchers next to `measure_eye.tcl`.** A launcher finds the driver
+beside itself; moved elsewhere it cannot, and says so. To run one from another
+directory, point `DM_EYE_HOME` at the checkout:
+
+```csh
+setenv DM_EYE_HOME /path/to/DM_AUTOMATION
+```
+
+If the launcher fails and the message mentions its own name coming back empty,
+the wrapper is not exposing the script path to Tcl — use `DM_EYE_CFG` with
+`measure_eye.tcl` directly instead, which does not depend on that.
+
 Or set the environment variable. **`VAR=value cmd` is bash syntax** — in
 csh/tcsh it is read as a command name and fails with "command not found":
 
