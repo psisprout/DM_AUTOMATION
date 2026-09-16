@@ -765,3 +765,75 @@ class TestReferenceFiles(Harness):
         codes = self.codes(findings)
         self.assertIn("improper-pattern", codes)
         self.assertIn("improper-option", codes)
+
+
+class TestSiNodeRule(Harness):
+    """SI decks: a signal node joins one driver and one receiver, no more."""
+
+    DECK = """* t
+.subckt blk i o
+R1 i o 50
+.ends
+XDRV  din  mid  blk
+XRCV  mid  dout blk
+XSTUB mid  spur blk
+XLONE alone lonelier blk
+Rterm dout 0 50
+.end
+"""
+
+    def si(self, text=None, **kw):
+        from primesim_dm import check as check_mod
+        path = self.write("d.sp", text or self.DECK)
+        dk = deck.read([path], search_dirs=[self.dir])
+        c = check_mod.Checker(dk, si=True, **kw)
+        return [f for f in c.run() if f.code == "si-node-fanout"]
+
+    def nets_flagged(self, findings):
+        return sorted(f.message.split()[1] for f in findings)
+
+    def test_off_unless_asked_for(self):
+        _dk, _c, findings = self.lint(self.DECK)
+        self.assertNotIn("si-node-fanout", self.codes(findings))
+
+    def test_a_node_joining_two_passes(self):
+        # mid has three, but dout has XRCV and Rterm - exactly two
+        self.assertNotIn("dout", self.nets_flagged(self.si()))
+
+    def test_three_is_a_failure_not_only_one(self):
+        flagged = self.nets_flagged(self.si())
+        self.assertIn("mid", flagged)        # three
+        self.assertIn("spur", flagged)       # one
+        self.assertIn("alone", flagged)      # one
+
+    def test_it_is_an_error_so_the_run_fails(self):
+        self.assertTrue(all(f.severity == check.SEV_ERROR for f in self.si()))
+
+    def test_the_message_names_what_is_on_the_net(self):
+        msg = [f.message for f in self.si() if f.message.split()[1] == "mid"][0]
+        self.assertIn("joins 3 element(s)", msg)
+        for name in ("XDRV", "XRCV", "XSTUB"):
+            self.assertIn(name, msg)
+
+    def test_passives_can_be_left_out_of_the_count(self):
+        # driver + receiver + a termination is still a two-element node to
+        # an SI reviewer, so this has to be a choice rather than a verdict
+        with_r = self.nets_flagged(self.si())
+        without = self.nets_flagged(self.si(si_ignore_passives=True))
+        self.assertNotIn("dout", with_r)
+        self.assertIn("dout", without)       # now only XRCV counts
+
+    def test_ground_and_globals_are_left_alone(self):
+        text = "* t\n.global vdd\nXA vdd 0 n1 blk3\nXB vdd 0 n1 blk3\n.end\n"
+        flagged = self.nets_flagged(self.si(text))
+        self.assertNotIn("vdd", flagged)
+        self.assertNotIn("0", flagged)
+
+    def test_keep_net_exempts_a_node(self):
+        self.assertIn("mid", self.nets_flagged(self.si()))
+        self.assertNotIn("mid", self.nets_flagged(self.si(keep_nets=["^mid$"])))
+
+    def test_the_expected_count_can_be_changed(self):
+        flagged = self.nets_flagged(self.si(si_expect=3))
+        self.assertNotIn("mid", flagged)     # three is right now
+        self.assertIn("dout", flagged)       # two is not

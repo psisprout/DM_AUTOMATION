@@ -12,6 +12,9 @@ import re
 
 from .references import REFERENCE_OPTION_FILES, REFERENCE_PATTERN_FILES
 
+# two-terminal passives, for --si-ignore-passives
+PASSIVE_KINDS = ("R", "C", "L")
+
 SEV_ERROR = "error"
 SEV_WARN = "warn"
 SEV_INFO = "info"
@@ -83,6 +86,21 @@ def deck_file_paths(deck):
     return out
 
 
+def on_net(users, ignore_kinds=()):
+    """The distinct elements sitting on a net, in the order they appear.
+
+    Distinct *elements*, not ports: an instance that passes the same net to
+    two of its pins is one thing touching it, not two.
+    """
+    out, seen = [], set()
+    for el, _idx in users:
+        if id(el) in seen or el.kind in ignore_kinds:
+            continue
+        seen.add(id(el))
+        out.append(el)
+    return out
+
+
 def touching(users):
     """How many distinct elements sit on a net.
 
@@ -120,8 +138,12 @@ GROUND_NAMES = ("0", "gnd", "gnd!", "vss", "0.0")
 
 class Checker(object):
     def __init__(self, deck, short_ohms=1e-6, ground_names=None,
-                 keep_nets=(), force_connectivity=False):
+                 keep_nets=(), force_connectivity=False,
+                 si=False, si_expect=2, si_ignore_passives=False):
         self.deck = deck
+        self.si = si
+        self.si_expect = si_expect
+        self.si_ignore = PASSIVE_KINDS if si_ignore_passives else ()
         self.force_connectivity = force_connectivity
         self.short_ohms = short_ohms
         self.ground = set(n.lower() for n in (ground_names or ("0", "gnd")))
@@ -205,6 +227,36 @@ class Checker(object):
                     self.add(SEV_WARN, code,
                              "no file this deck reads has the same content as "
                              "the reference %s file %s" % (kind, ref))
+
+    def check_si_nodes(self):
+        """An SI node joins exactly two things - one driver, one receiver.
+
+        Off by default.  It is a rule about a particular kind of deck, not
+        about SPICE: a power net or a control node legitimately has one
+        element on it or a dozen, and turning this on for those would bury
+        the decks it is meant to police.
+
+        Rails, globals and --keep-net are left out for the same reason the
+        floating check leaves them out - they are not signal path.
+        """
+        if not self.si:
+            return
+        for net, users in sorted(self.deck.net_users.items()):
+            if net in self.ground or net in self.deck.globals:
+                continue
+            if any(rx.search(net) for rx in self.keep):
+                continue
+            els = on_net(users, self.si_ignore)
+            if not els or len(els) == self.si_expect:
+                continue
+            names = ", ".join(el.name for el in els[:6])
+            if len(els) > 6:
+                names += ", ..."
+            self.add(SEV_ERROR, "si-node-fanout",
+                     "net %s joins %d element(s) (%s); an SI node should "
+                     "join exactly %d"
+                     % (net, len(els), names, self.si_expect),
+                     els[0].where())
 
     def check_duplicate_names(self):
         seen = {}
@@ -305,6 +357,7 @@ class Checker(object):
         self.check_filters()
         self.check_unparsed()
         self.check_reference_files()
+        self.check_si_nodes()
         self.check_duplicate_names()
         self.check_instances()
         self.check_merged_nets()

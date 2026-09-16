@@ -162,6 +162,41 @@ opaque   : 1 file(s) read for interfaces only (insides not checked)
 > 패턴은 **전체 경로**에 걸리는 정규식입니다. `pdk` 처럼 짧게 쓰면 상위 디렉토리 이름에도
 > 걸리니 `/pdk/` 나 `\.spf$` 처럼 앵커를 넣으세요.
 
+### `--si` — signal 노드는 소자 2개 (SI 덱 전용)
+
+SI 덱에서 signal 노드는 **드라이버 하나 + 리시버 하나**로 딱 2개가 붙는 게 정상입니다.
+1개면 어딘가 안 이어진 것이고, 3개 이상이면 의도치 않은 분기(stub)입니다.
+
+```bash
+primesim-dm lint deck.sp --si -o report.txt
+```
+
+```
+ERROR si-node-fanout  net txp1 joins 3 element(s) (XDRV1, XCH1, XSTUB);
+                      an SI node should join exactly 2   [deck.sp:15]
+ERROR si-node-fanout  net rxp2 joins 1 element(s) (XCH2);
+                      an SI node should join exactly 2   [deck.sp:22]
+```
+
+ERROR 라 **exit 1** 입니다 — 회귀 스크립트에 그대로 물립니다.
+
+**기본은 꺼져 있습니다.** 이건 SPICE 규칙이 아니라 *특정 종류의 덱*에 대한 규칙이라서요.
+전원 노드나 제어 노드는 1개나 열 개가 붙는 게 정상이고, 그런 덱에 켜면 정작 봐야 할
+것이 묻힙니다.
+
+| 옵션 | 뜻 |
+|---|---|
+| `--si` | 규칙 켜기 |
+| `--si-expect N` | 기대 개수 (기본 2) |
+| `--si-ignore-passives` | R/C/L 은 안 셈 — 드라이버+리시버+**종단**을 2개로 볼 때 |
+
+- **레일/`.global`/`--keep-net` 은 검사에서 빠집니다.** floating 검사가 빼는 것과 같은
+  이유로, 그건 signal path 가 아닙니다.
+- 소자 개수는 **서로 다른 소자** 기준입니다. 한 인스턴스가 같은 net 을 두 포트에 물려도
+  1개로 셉니다.
+- 덱 경계(자극원이 붙는 입력, 프로브만 있는 출력)는 1개로 잡힐 수 있습니다.
+  그건 `--keep-net` 으로 빼세요.
+
 ### 기준 패턴 / 옵션 파일 확인
 
 "이 덱이 **약속된 패턴과 옵션**으로 돌고 있나"를 매 `lint` 마다 확인합니다.
@@ -265,6 +300,7 @@ INFO  merged-net         ball_dq0 and ball_dq1 are one node (Rshort = 0 ohm)
 | `merged-net` | INFO | 0옴 저항이나 `.connect` 로 두 net이 사실상 한 노드 |
 | `improper-pattern` | WARN | 기준 패턴 파일과 내용이 같은 파일이 덱에 없음 |
 | `improper-option` | WARN | 기준 옵션 파일과 내용이 같은 파일이 덱에 없음 |
+| `si-node-fanout` | ERROR | **`--si` 일 때만.** signal 노드에 붙은 소자가 2개가 아님 |
 
 에러가 있으면 exit 1, `--strict` 면 경고에도 exit 1입니다.
 

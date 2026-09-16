@@ -230,7 +230,9 @@ def cmd_lint(args):
         return _err("could not read any of: %s" % ", ".join(args.deck))
     checker = check_mod.Checker(dk, short_ohms=args.short_ohms,
                                 keep_nets=args.keep_net or [],
-                                force_connectivity=args.force_connectivity)
+                                force_connectivity=args.force_connectivity,
+                                si=args.si, si_expect=args.si_expect,
+                                si_ignore_passives=args.si_ignore_passives)
     findings = checker.run()
     counts = checker.counts()
     report = check_mod.render(
@@ -480,6 +482,18 @@ def build_parser():
     s.add_argument("--force-connectivity", action="store_true",
                    help="run the floating/isolated checks even when includes "
                         "are missing (results will be noisy)")
+    s.add_argument("--si", action="store_true",
+                   help="SI rule: every signal node must join exactly two "
+                        "elements, one driver and one receiver. Anything "
+                        "else is an error. Off by default - a power or "
+                        "control node breaks it legitimately")
+    s.add_argument("--si-expect", type=int, default=2, metavar="N",
+                   help="how many elements an SI node should join "
+                        "(default 2)")
+    s.add_argument("--si-ignore-passives", action="store_true",
+                   help="do not count R/C/L towards the SI rule, so a node "
+                        "with a driver, a receiver and a termination still "
+                        "counts as two")
     s.add_argument("--summary", action="store_true",
                    help="counts per finding kind only, no individual lines")
     s.add_argument("--limit", type=int, default=10,
