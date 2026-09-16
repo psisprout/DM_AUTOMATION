@@ -1,9 +1,9 @@
 # ---------------------------------------------------------------------------
 # cfg/nand_read.tcl -- NAND READ
 #
-# TEMPLATE.  Timing, naming and the reference .sx below are placeholders
-# carried over from the LP5x flow -- replace them with the NAND values.
-# Nothing outside this file and ref/nand_read.sx needs to change.
+# TEMPLATE.  The timing and naming below are placeholders carried over from
+# the LP5x flow -- replace them with the NAND values.  Nothing outside this
+# file needs to change.
 # ---------------------------------------------------------------------------
 
 set UI_VALUE     625p            ;# <-- NAND UI

@@ -6,11 +6,11 @@
 # Neither is guessed here -- both are config data, marked <-- below.
 #
 # To finish it:
-#   1. build one CA eye with the hexagonal mask in the GUI, save the session
-#      over ref/lp5x_ca.sx
-#   2. set measure_args to the argument list sx_measure_eye wants for it
-#   3. point session_subst at whatever that panel calls vref / vac / UI / shift
-#      (diff ref/lp5x_ca.sx against ref/lp5x_write.sx to see what changed)
+#   1. build one CA eye with the hexagonal mask in the GUI and save the session
+#   2. set sx_panel to that session's panel_begin / line / panel_end lines
+#      (or point session_template at the saved file)
+#   3. set measure_args to the argument list sx_measure_eye wants for it
+#   4. point session_subst at whatever that panel calls vref / vac / UI / shift
 #
 # No code changes are needed for either.
 # ---------------------------------------------------------------------------

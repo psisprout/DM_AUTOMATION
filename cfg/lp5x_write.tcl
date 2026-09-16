@@ -1,8 +1,8 @@
 # ---------------------------------------------------------------------------
 # cfg/lp5x_write.tcl -- LP5x WRITE
 #
-# A protocol is defined entirely by a file like this one plus its own
-# reference .sx.  measure_eye.tcl and lib/ contain no protocol knowledge.
+# A protocol is defined entirely by a file like this one.  measure_eye.tcl and
+# lib/ contain no protocol knowledge.
 # ---------------------------------------------------------------------------
 
 set UI_VALUE     312.5p
@@ -64,8 +64,8 @@ dict set CFG session_fmt [dict create \
 ]
 
 # --- what the .sx panel calls each thing --------------------------------------
-# session_subst maps a key in the reference panel to where its value comes
-# from.  A mask whose panel uses different field names only needs this remapped.
+# session_subst maps a key in the .sx panel to where its value comes from.
+# A mask whose panel uses different field names only needs this remapped.
 dict set CFG session_subst [dict create \
     eye_ext   trig        \
     em_vref   vref        \
