@@ -15,16 +15,17 @@ sx_sub -no_gui measure_eye.tcl cfg/lp5x_write.tcl
 ```
 
 **If `sx_sub` does not forward script arguments** (the config comes out wrong
-or the run refuses), use a launcher instead — copy `run_example.tcl` per
-protocol and change one line:
-
-```tcl
-set DM_EYE_CFG nand_read
-source [file join [file dirname [file normalize [info script]]] measure_eye.tcl]
-```
+or the run refuses), use the launcher for that protocol:
 
 ```sh
 sx_sub -no_gui run_nand_read.tcl
+```
+
+There is one per config. Each takes its config name from its own filename, so
+adding one is a copy with nothing to edit:
+
+```sh
+cp run_nand_read.tcl run_lp5x_read.tcl     # uses cfg/lp5x_read.tcl
 ```
 
 Or set the environment variable. **`VAR=value cmd` is bash syntax** — in
@@ -69,6 +70,15 @@ To look at a result: `sx_sub`, then open `out/corner_tt_1p0v_lp5x_write.sx`.
 ## Adding a protocol
 
 A protocol is a file in `cfg/`. No code changes, no companion files.
+
+```sh
+cp cfg/lp5x_write.tcl cfg/lp5x_read.tcl    # then edit, including `name`
+cp run_lp5x_write.tcl run_lp5x_read.tcl    # launcher, no edit needed
+```
+
+Output files are named after the config's `name` field, not its filename. If
+the two disagree the run says so, because a copied config that keeps the old
+`name` would overwrite the original's output.
 `cfg/nand_read.tcl` is a filled-in skeleton to copy. What a config owns:
 
 | | |
@@ -203,6 +213,7 @@ all 41 sweep points — rebuilding it per point would re-slice the waveform 41x.
 
 ```
 measure_eye.tcl      driver: glob -> vref sweep -> CSV -> .sx
+run_<config>.tcl     launcher per config, for wrappers that drop argv
 lib/eye_lib.tcl      sweep parsing, signal naming, eye create/measure/query
 lib/session.tcl      .sx generation from a reference panel
 cfg/lp5x_write.tcl   LP5x write

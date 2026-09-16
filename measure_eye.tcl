@@ -94,6 +94,14 @@ if {![file readable $CFG_FILE]} { error "config not readable: $CFG_FILE" }
 source $CFG_FILE
 eye::log "config: $CFG_FILE ([dict get $CFG name]) -- via $CFG_FROM"
 
+# Output files are named after the config's 'name', not its filename.  Copying
+# a config without changing 'name' silently overwrites the original's output.
+set _stem [file rootname [file tail $CFG_FILE]]
+if {$_stem ne [dict get $CFG name]} {
+    eye::log "NOTE: $_stem.tcl declares name '[dict get $CFG name]';"
+    eye::log "NOTE: output will be out/[dict get $CFG name]_eye.csv and *_[dict get $CFG name].sx"
+}
+
 set OUT_DIR [file join $SCRIPT_DIR out]
 file mkdir $OUT_DIR
 
