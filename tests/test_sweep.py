@@ -326,3 +326,36 @@ class VectorFitTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CsvAppenderTests(unittest.TestCase):
+    def test_rows_are_readable_before_the_sweep_ends(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "s.csv")
+            app = sweep_mod.CsvAppender(path)
+            app.add({"index": 0, "size": 10, "status": "FAIL"})
+            with open(path, newline="") as fh:  # still open for writing
+                rows = list(csv.DictReader(fh))
+            self.assertEqual(rows, [{"index": "0", "size": "10", "status": "FAIL"}])
+            app.add({"index": 1, "size": 20, "status": "PASS"})
+            with open(path, newline="") as fh:
+                self.assertEqual(len(list(csv.DictReader(fh))), 2)
+            app.close()
+
+    def test_a_later_row_with_new_keys_does_not_break_the_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "s.csv")
+            app = sweep_mod.CsvAppender(path)
+            app.add({"index": 0, "size": 10})
+            app.add({"index": 1, "size": 20, "x_rms": "1e-9"})
+            app.close()
+            with open(path, newline="") as fh:
+                rows = list(csv.DictReader(fh))
+        self.assertEqual(len(rows), 2)
+        self.assertNotIn("x_rms", rows[1], "the final to_csv carries the full union")
+
+    def test_close_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app = sweep_mod.CsvAppender(os.path.join(tmp, "s.csv"))
+            app.close()
+            app.close()

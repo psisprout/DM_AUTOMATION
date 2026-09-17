@@ -188,8 +188,12 @@ is reachable from a script has to be established on a machine with AEDT —
 record a conversion with AEDT's script recorder, and if the NDE calls appear
 they go in `NdeGenerator.candidates()`. Nothing else in the sweep changes.
 
-Every trial lands in `sweep.csv`, and `Sweep.pareto()` gives the non-dominated
-(size, headroom) points when you want the trade-off rather than one winner.
+Every trial lands in `sweep.csv` **as it finishes**, not at the end: a long
+sweep is minutes per fit and gets killed often enough — a queue limit, a
+Ctrl-C, a lost session — that losing the completed trials would hurt. The file
+is rewritten with the full column set when the run completes normally.
+`Sweep.pareto()` gives the non-dominated (size, headroom) points when you want
+the trade-off rather than one winner.
 
 ### Batch use
 

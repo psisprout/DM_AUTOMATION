@@ -146,6 +146,40 @@ class Sweep:
         return path
 
 
+class CsvAppender:
+    """Write trials as they finish, so an interrupted sweep keeps its history.
+
+    A long sweep is minutes per fit and gets killed often enough - a queue
+    limit, a Ctrl-C, a lost session - and losing every completed trial because
+    the file is only written at the end is a bad trade.  Columns come from the
+    first row; the final :meth:`Sweep.to_csv` rewrites the file with the union
+    of every row's keys, so the complete run is still authoritative.
+    """
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self._fields: List[str] = []
+        self._handle = None
+        self._writer = None
+
+    def add(self, row: dict) -> None:
+        if self._writer is None:
+            self._fields = list(row)
+            self._handle = open(self.path, "w", newline="", encoding="utf-8")
+            self._writer = csv.DictWriter(
+                self._handle, fieldnames=self._fields, extrasaction="ignore", restval=""
+            )
+            self._writer.writeheader()
+        self._writer.writerow(row)
+        self._handle.flush()
+
+    def close(self) -> None:
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
+            self._writer = None
+
+
 # --------------------------------------------------------------------------
 # generators
 # --------------------------------------------------------------------------
@@ -422,6 +456,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     else:
         generator = GENERATORS[args.backend]()
 
+    csv_path = args.csv or os.path.join(out_dir, "sweep.csv")
+    appender = CsvAppender(csv_path)
+
     header = f"{'poles':>6} {'status':>6} {'headroom':>9} {'margin':>8} {'rms':>10} {'passive':>8}"
     print(header)
 
@@ -429,12 +466,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         c = trial.candidate
         if c.error:
             print(f"{c.size:>6} {'ERROR':>6}  {c.error[:50]}")
-            return
-        print(
-            f"{c.size:>6} {trial.status:>6} {trial.headroom:>9.3f} "
-            f"{trial.margin:>+8.3f} {str(c.extra.get('rms', '')):>10} "
-            f"{str(c.extra.get('passive', '')):>8}"
-        )
+        else:
+            print(
+                f"{c.size:>6} {trial.status:>6} {trial.headroom:>9.4g} "
+                f"{trial.margin:>+8.4g} {str(c.extra.get('rms', '')):>10} "
+                f"{str(c.extra.get('passive', '')):>8}"
+            )
+        appender.add(trial.row())
+        sys.stdout.flush()  # a piped or redirected sweep shows progress
 
     try:
         sweep = run_sweep(
@@ -447,9 +486,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except GeneratorUnavailable as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    except KeyboardInterrupt:
+        appender.close()
+        print(f"\ninterrupted; the trials so far are in {csv_path}", file=sys.stderr)
+        return 130
+    finally:
+        appender.close()
 
-    csv_path = args.csv or os.path.join(out_dir, "sweep.csv")
-    sweep.to_csv(csv_path)
+    sweep.to_csv(csv_path)  # rewrite with the union of every row's columns
     print(f"\nhistory: {csv_path}")
 
     pareto = sweep.pareto()
