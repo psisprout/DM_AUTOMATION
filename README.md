@@ -145,6 +145,52 @@ figure, and tab 5 plots them. For a CI gate, *Save JUnit XML* (or `--junit`)
 writes one testcase per Z term, and the CLI exits non-zero on a failing
 comparison.
 
+### Searching for the smallest model that passes
+
+`sparabbs.sweep` runs the loop: a backend proposes a model, the model is
+scored, and the run keeps the cheapest candidate that meets the criteria.
+
+```bash
+python -m sparabbs.sweep --snp a.snp --orders 10:90:10 --stop-early --out run
+```
+
+```
+ poles status  headroom   margin        rms  passive
+    24   PASS     0.003   +0.997  9.706e-10    False
+
+best: 24 poles, PASS, margin +0.997
+netlist: run/fit_0024p.sp
+confirm it through SPICE:
+  python -m sparabbs.cli --snp a.snp --bbs run/fit_0024p.sp --out run/confirm
+```
+
+**"Optimal" is the smallest model that passes, not the most accurate one.** A
+fit with hundreds of poles matches beautifully and is useless to simulate
+with, so the search minimizes pole count subject to the criteria; `--require
+WARN` relaxes what counts as acceptable, and `--stop-early` ends at the first
+pass, which is the smallest one when the orders ascend.
+
+Candidates are scored on the **fitted model's own response**, so an iteration
+costs a fit rather than a simulation — seconds, not minutes. Confirm the winner
+through the normal deck-and-run path afterwards: that is what proves the
+netlist a downstream tool will actually read.
+
+`CompareResult.headroom()` is the scalar the search needs — the worst metric as
+a fraction of its limit, so 1.0 sits exactly on a threshold. `margin()` is
+`1 - headroom`: positive passes, negative fails. PASS/WARN/FAIL cannot rank two
+models that both pass; this can.
+
+**Backends.** `--backend skrf` fits with scikit-rf's vector fitting, the same
+algorithm commercial broadband-SPICE tools use, and writes a SPICE subcircuit
+that this tool drives with no configuration. `--backend nde` is a slot for
+Ansys AEDT's Network Data Explorer and is not wired up: whether NDE's fitting
+is reachable from a script has to be established on a machine with AEDT —
+record a conversion with AEDT's script recorder, and if the NDE calls appear
+they go in `NdeGenerator.candidates()`. Nothing else in the sweep changes.
+
+Every trial lands in `sweep.csv`, and `Sweep.pareto()` gives the non-dominated
+(size, headroom) points when you want the trade-off rather than one winner.
+
 ### Batch use
 
 ```bash
@@ -170,6 +216,7 @@ sparabbs/
   runner.py       launching the simulator, finding the .sNp it wrote
   compare.py      reference-node transforms, banding, metrics, verdicts
   plotting.py     term selection idioms and the plots themselves
+  sweep.py        model search: backends, scoring, the pareto front
   report.py       JUnit output for CI
   cli.py          headless driver
   gui/

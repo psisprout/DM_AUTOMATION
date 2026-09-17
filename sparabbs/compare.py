@@ -30,6 +30,13 @@ class CompareError(ValueError):
     """Raised when two networks cannot be compared."""
 
 
+def _ratio(value: float, limit: float) -> float:
+    """value/limit, with a non-finite metric treated as a hard failure."""
+    if not np.isfinite(value):
+        return float("inf")
+    return value / limit if limit > 0 else float("inf")
+
+
 def worst(*statuses: str) -> str:
     return max(statuses, key=lambda s: _RANK.get(s, 0)) if statuses else PASS
 
@@ -201,6 +208,10 @@ class Criteria:
     warn_frac: float = 0.6
     #: dB/phase statistics ignore points below this fraction of the band peak
     significance_floor: float = 0.01
+    #: a term/band below this fraction of the whole matrix's peak |Z| is noise,
+    #: not signal - decoupled port pairs roll off to 1e-19 ohm, and normalizing
+    #: such a band to its own peak turns round-off into a huge percentage
+    noise_floor: float = 1e-6
     #: when False a passivity/reciprocity violation warns but does not fail
     gate_on_checks: bool = False
     bands: tuple[tuple[str, float, float], ...] = DEFAULT_BANDS
@@ -221,6 +232,7 @@ class BandStat:
     f_lo: float
     f_hi: float
     npoints: int
+    negligible: bool
     norm_err_pct: float
     max_err_db: float
     rmse_db: float
@@ -273,6 +285,40 @@ class CompareResult:
                 return t
         raise KeyError(f"no term Z{i}{j}")
 
+    def headroom(self) -> float:
+        """Worst metric as a fraction of its limit, over every term.
+
+        1.0 means something sits exactly on its threshold, above 1.0 something
+        failed.  A single number like this is what a search loop needs; PASS /
+        WARN / FAIL cannot rank two models that both pass.
+        """
+        crit = self.criteria
+        ratios = [0.0]
+        for term in self.terms:
+            for b in term.bands:
+                if b.negligible:
+                    continue
+                ratios += [
+                    _ratio(b.norm_err_pct, crit.mag_err_pct),
+                    _ratio(b.max_err_db, crit.err_db),
+                    _ratio(b.max_phase_deg, crit.phase_err_deg),
+                ]
+            for pk in term.peaks:
+                ratios += [
+                    _ratio(pk.shift_pct, crit.peak_shift_pct),
+                    _ratio(pk.mag_err_pct, crit.peak_mag_err_pct),
+                ]
+        return max(ratios)
+
+    def margin(self) -> float:
+        """How much room is left before something fails.
+
+        Positive passes, zero sits on a limit, negative fails.  Maximizing this
+        maximizes accuracy; holding it above zero while shrinking the model is
+        the constraint a BBS search actually wants.
+        """
+        return 1.0 - self.headroom()
+
     def counts(self) -> dict[str, int]:
         out = {PASS: 0, WARN: 0, FAIL: 0}
         for t in self.terms:
@@ -319,12 +365,13 @@ def compare(
     z_dut, _ = apply_reference(z_dut, ref.port_names, reference)
 
     n = z_ref.shape[-1]
+    scale = float(np.max(np.abs(z_ref))) if z_ref.size else 0.0
     terms: list[TermResult] = []
     for i in range(n):
         for j in range(n):
             if upper_triangle_only and j < i:
                 continue
-            terms.append(_term(freq, z_ref, z_dut, i, j, names, criteria))
+            terms.append(_term(freq, z_ref, z_dut, i, j, names, criteria, scale))
 
     check_status = [c[1] for c in checks]
     if not criteria.gate_on_checks:
@@ -350,7 +397,22 @@ def _z0txt(z0: np.ndarray) -> str:
     return f"{z0[0]:g} ohm" if np.allclose(z0, z0[0]) else "per-port"
 
 
-def _term(freq, z_ref, z_dut, i, j, names, crit: Criteria) -> TermResult:
+def _scale(z_ref, i, j, sel) -> float:
+    """The impedance an error in Zij should be measured against.
+
+    For a self term that is its own peak.  For a mutual term it is the
+    geometric mean of the two self impedances it couples, because that is what
+    makes the error dimensionless in the way that matters: a 1e-5 ohm error in
+    Z12 is irrelevant next to 1e-2 ohm rails and serious next to 1e-5 ohm ones.
+    Judging a mutual term against its own magnitude instead reports thousands
+    of percent for a fit that is, in every way anyone cares about, excellent.
+    """
+    zii = float(np.max(np.abs(z_ref[sel, i, i])))
+    zjj = float(np.max(np.abs(z_ref[sel, j, j])))
+    return float(np.sqrt(zii * zjj))
+
+
+def _term(freq, z_ref, z_dut, i, j, names, crit: Criteria, scale_ref: float) -> TermResult:
     a = z_ref[:, i, j]
     b = z_dut[:, i, j]
     label = f"Z{i + 1}{j + 1}" if len(names) < 10 else f"Z({i + 1},{j + 1})"
@@ -360,36 +422,61 @@ def _term(freq, z_ref, z_dut, i, j, names, crit: Criteria) -> TermResult:
         sel = (freq >= lo) & (freq < hi)
         if not sel.any():
             continue
-        bands.append(_band_stat(name, lo, hi, freq[sel], a[sel], b[sel], crit))
+        bands.append(
+            _band_stat(
+                name, lo, hi, freq[sel], a[sel], b[sel], crit,
+                scale_ref, _scale(z_ref, i, j, sel),
+            )
+        )
 
     peaks = _peak_stats(freq, a, b, crit) if i == j else []
     status = worst(*(bs.status for bs in bands), *(p.status for p in peaks))
     return TermResult(i=i + 1, j=j + 1, name=label, bands=bands, peaks=peaks, status=status)
 
 
-def _band_stat(name, lo, hi, f, a, b, crit: Criteria) -> BandStat:
+def _band_stat(
+    name, lo, hi, f, a, b, crit: Criteria, scale_ref: float, pair_scale: float
+) -> BandStat:
     peak = float(np.max(np.abs(a))) if a.size else 0.0
-    scale = peak if peak > 0 else 1.0
+    floor = crit.noise_floor * scale_ref
+    negligible = peak <= floor
+
+    # judge the error against the impedance scale of the ports involved, never
+    # below the matrix noise floor
+    scale = max(pair_scale, floor) or 1.0
     norm_err = np.abs(b - a) / scale * 100.0
 
-    keep = np.abs(a) >= crit.significance_floor * peak
+    # judge relative accuracy only where the term carries meaningful signal:
+    # a mutual impedance two decades below the rails it couples can be out by
+    # 40 dB without anyone noticing, and reporting that as a failure buries the
+    # terms that do matter
+    keep = np.abs(a) >= max(crit.significance_floor * scale, floor)
     if not keep.any():
-        keep = np.ones_like(f, dtype=bool)
-    ratio = np.abs(b[keep]) / np.maximum(np.abs(a[keep]), 1e-300)
-    err_db = 20.0 * np.log10(np.maximum(ratio, 1e-300))
-    dphase = np.angle(b[keep] / np.where(a[keep] == 0, 1e-300, a[keep]), deg=True)
+        keep = np.zeros_like(f, dtype=bool)
+    if keep.any():
+        ratio = np.abs(b[keep]) / np.maximum(np.abs(a[keep]), 1e-300)
+        err_db = 20.0 * np.log10(np.maximum(ratio, 1e-300))
+        dphase = np.angle(b[keep] / np.where(a[keep] == 0, 1e-300, a[keep]), deg=True)
+    else:  # nothing in this band rises above the noise floor
+        err_db = np.zeros(1)
+        dphase = np.zeros(1)
 
     worst_at = int(np.argmax(norm_err))
-    status = worst(
-        crit.judge(float(np.max(norm_err)), crit.mag_err_pct),
-        crit.judge(float(np.max(np.abs(err_db))), crit.err_db),
-        crit.judge(float(np.max(np.abs(dphase))), crit.phase_err_deg),
+    status = (
+        PASS
+        if negligible
+        else worst(
+            crit.judge(float(np.max(norm_err)), crit.mag_err_pct),
+            crit.judge(float(np.max(np.abs(err_db))), crit.err_db),
+            crit.judge(float(np.max(np.abs(dphase))), crit.phase_err_deg),
+        )
     )
     return BandStat(
         name=name,
         f_lo=float(f[0]),
         f_hi=float(f[-1]),
         npoints=int(f.size),
+        negligible=negligible,
         norm_err_pct=float(np.max(norm_err)),
         max_err_db=float(np.max(np.abs(err_db))),
         rmse_db=float(np.sqrt(np.mean(err_db**2))),
