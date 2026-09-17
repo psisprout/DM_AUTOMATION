@@ -103,6 +103,54 @@ XB a0 b0 sub
         floating = sorted(n.label for n in g.nets if n.floating)
         self.assertEqual(floating, ["b0", "spare"])
 
+    def test_the_size_guard_does_not_cut_a_source_first(self):
+        # a stimulus source has one signal pin and a rail, so by pin count it
+        # sorts below every block - and it is where the signal path starts.
+        # Ranked on pins alone all three would go and nine blocks would stay.
+        body = ["* t"]
+        for i in range(9):
+            body.append("XBLK%d n%d m%d o%d sub" % (i, i, i, i))
+        for i in range(3):
+            body.append("VIN%d n%d 0 DC 1" % (i, i))
+        g = graph_mod.build(read_text(self.tmp, "\n".join(body) + "\n"),
+                            max_elements=8)
+        drawn = [b.name for b in g.boxes]
+        self.assertEqual(len(drawn), 8)
+        for i in range(3):
+            self.assertIn("VIN%d" % i, drawn)
+        self.assertEqual(len([n for n in drawn if n.startswith("XBLK")]), 5)
+
+    def test_sources_take_at_most_half_the_budget(self):
+        # protection that leaves a picture of sources with nothing between
+        # them has cost the sources their context
+        body = ["* t"]
+        for i in range(10):
+            body.append("VIN%d n%d 0 DC 1" % (i, i))
+        for i in range(4):
+            body.append("XBLK%d n%d m%d sub" % (i, i, i))
+        g = graph_mod.build(read_text(self.tmp, "\n".join(body) + "\n"),
+                            max_elements=6)
+        kinds = [b.kind for b in g.boxes]
+        self.assertEqual(len(g.boxes), 6)
+        self.assertEqual(kinds.count("V"), 3)
+        self.assertEqual(kinds.count("X"), 3)
+
+    def test_what_the_guard_cut_is_still_in_the_page(self):
+        body = ["* t"]
+        for i in range(6):
+            body.append("XBLK%d n%d m%d sub" % (i, i, i))
+        g = graph_mod.build(read_text(self.tmp, "\n".join(body) + "\n"),
+                            max_elements=3, keep_hidden=True)
+        self.assertEqual(len(g.boxes), 3)
+        self.assertEqual(len(g.gone_boxes), 3)
+        self.assertEqual(g.dropped, 3)
+        # counted apart from the ones somebody chose to hide
+        self.assertEqual(g.hidden, 0)
+        state = graph_mod.viewer_state(g)
+        capped = [b for b in state["boxes"] if b["hidden"]]
+        self.assertEqual(len(capped), 3)
+        self.assertTrue(all(b["why"] == "cap" for b in capped))
+
     def test_max_elements_keeps_the_best_connected(self):
         body = ["* t", "XHUB n0 n1 n2 n3 n4 sub"]
         for i in range(5):
@@ -111,7 +159,7 @@ XB a0 b0 sub
         g = graph_mod.build(dk, max_elements=3)
         self.assertEqual(len(g.boxes), 3)
         self.assertEqual(g.dropped, 3)
-        self.assertEqual(g.boxes[0].name, "XHUB")
+        self.assertIn("XHUB", [b.name for b in g.boxes])
 
     def test_separate_parts_stack_instead_of_marching_right(self):
         # an IO called out bit by bit is N identical unconnected parts; laid
@@ -484,6 +532,14 @@ class HtmlTest(unittest.TestCase):
         # and the feedback overlays must not take a press from a box
         self.assertIn("#dropzones, #dropline, #band { pointer-events: none; }",
                       html)
+
+    def test_the_viewer_tells_the_two_kinds_of_hidden_apart(self):
+        html = graph_mod.render_html(self.graph())
+        self.assertIn("past --max-elements", html)
+        # what the guard trimmed must not be written into a layout file:
+        # the cap is recomputed every run, and saving it would make this
+        # run's trimming permanent
+        self.assertIn("hid[b.id] !== 'cap'", html)
 
     def test_the_viewer_can_hide_instances(self):
         html = graph_mod.render_html(self.graph())

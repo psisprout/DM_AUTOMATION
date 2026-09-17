@@ -43,6 +43,11 @@ SEV_FLOATING = "floating"
 # absorbing it would break the path the picture exists to show.
 PASSIVE_KINDS = ("R", "C", "L")
 
+# A stimulus source has one signal pin and a rail, so counting pins puts it
+# last - and it is the start of the signal path.  The size guard never cuts
+# one.
+SOURCE_KINDS = ("V", "I")
+
 
 def _stem(net):
     """('dq<7>') -> ('dq', 7); a net with no index -> (net, None)."""
@@ -274,16 +279,28 @@ def build(deck, rails=DEFAULT_RAILS, group_buses=True, max_elements=80,
 
     live = [b for b in boxes if not b.hidden]
     if max_elements and len(live) > max_elements:
-        # a size guard, not a choice: keep the most-connected ones, since a
-        # hub tells you more than a leaf
+        # A size guard, not a choice: keep the best-connected, since a hub
+        # tells you more than a leaf.  Sources are never cut - by pin count
+        # they look like the least important thing in the deck and they are
+        # where every signal starts.
         degree = {}
         for box in live:
             degree[id(box)] = len([n for n in box.el.nodes if not is_rail(n)])
-        live.sort(key=lambda b: -degree[id(b)])
-        for box in live[max_elements:]:
-            box.hidden = True
-            box.dropped = True
-        g.dropped = len(live) - max_elements
+        held = sorted((b for b in live if b.kind in SOURCE_KINDS),
+                      key=lambda b: -degree[id(b)])
+        rest = sorted((b for b in live if b.kind not in SOURCE_KINDS),
+                      key=lambda b: -degree[id(b)])
+        # Sources are protected, but only up to half the budget.  A deck can
+        # have more stimulus than blocks, and letting them take every slot
+        # leaves a picture of sources with nothing between them - protection
+        # that costs the thing being protected its context.
+        quota = min(len(held), max(1, max_elements // 2))
+        keep = set(id(b) for b in held[:quota] + rest[:max_elements - quota])
+        for box in live:
+            if id(box) not in keep:
+                box.hidden = True
+                box.dropped = True
+        g.dropped = len(live) - len(keep)
 
     # collapse buses: same stem, same endpoints, and more than one member.
     # Endpoints here are the real ones, so two nets wired alike still group
@@ -344,10 +361,11 @@ def build(deck, rails=DEFAULT_RAILS, group_buses=True, max_elements=80,
 
     g.boxes = [b for b in boxes if not b.hidden]
     g.nets = [n for n in nodes if not (n.hidden or n.orphan)]
-    g.hidden = sum(1 for b in boxes if b.hidden and not getattr(b, "dropped", False))
+    g.hidden = sum(1 for b in boxes if b.hidden and not b.dropped)
     if keep_hidden:
-        g.gone_boxes = [b for b in boxes
-                        if b.hidden and not getattr(b, "dropped", False)]
+        # the ones past the cap are kept too: "where did that instance go"
+        # deserves an answer, and the viewer can hand any of them back
+        g.gone_boxes = [b for b in boxes if b.hidden]
         g.gone_nets = [n for n in nodes if n.hidden or n.orphan]
 
     for box in g.boxes:
@@ -470,7 +488,11 @@ def _layer_from_layout(g, layout):
     for box in g.boxes + g.gone_boxes:
         spec = layout.elements.get(box.name)
         if spec is None:
-            unplaced.append(box)
+            if not box.hidden:
+                unplaced.append(box)
+            else:
+                box.layer = 0
+                box.order = 0
             continue
         box.layer = int(spec["column"]) * 2
         box.order = float(spec["row"])
@@ -870,6 +892,8 @@ def viewer_state(g):
     for i, box in enumerate(g.boxes + g.gone_boxes):
         boxes.append({"id": "b%d" % i, "name": box.name,
                       "sub": box.sub_label, "hidden": bool(box.hidden),
+                      # why it is not drawn: a choice, or the size guard
+                      "why": ("cap" if box.dropped else "file"),
                       "where": box.el.where(), "rails": list(box.rails),
                       "col": int(box.layer // 2), "row": float(box.order),
                       "x": round(box.x, 2), "y": round(box.y, 2),
@@ -1418,6 +1442,9 @@ EDITOR_JS = r"""
     });
 
     D.boxes.concat(D.nets).forEach(function (n) {
+      // anything hidden was left out of the placement above and has no
+      // position yet; it gets one the moment it is put back
+      if (n.nx === undefined) return;
       var el = document.getElementById(n.id);
       if (el) el.setAttribute('transform', 'translate(' +
         (n.nx - n.x).toFixed(2) + ' ' + (n.ny - n.y).toFixed(2) + ')');
@@ -1451,6 +1478,7 @@ EDITOR_JS = r"""
   function bounds() {
     var t = 1e9, b = -1e9;
     D.boxes.concat(D.nets).forEach(function (n) {
+      if (n.nx === undefined) return;
       t = Math.min(t, n.ny); b = Math.max(b, n.ny + n.h); });
     return { top: t === 1e9 ? G.top : t, bottom: b === -1e9 ? G.top + 100 : b };
   }
@@ -1507,7 +1535,7 @@ EDITOR_JS = r"""
   var panel = document.getElementById('panel');
   var panelBody = document.getElementById('panelbody');
 
-  D.boxes.forEach(function (b) { if (b.hidden) hid[b.id] = 'file'; });
+  D.boxes.forEach(function (b) { if (b.hidden) hid[b.id] = b.why || 'file'; });
   D.nets.forEach(function (n) { if (n.hidden) hidNet[n.id] = 'file'; });
 
   function netState(n) {
@@ -1559,8 +1587,11 @@ EDITOR_JS = r"""
       w.classList.toggle('gone', !!gone);
     });
 
-    var nb = 0, nn = 0, nnRed = 0;
-    D.boxes.forEach(function (b) { if (hid[b.id]) nb += 1; });
+    var nb = 0, nn = 0, nnRed = 0, ncap = 0;
+    D.boxes.forEach(function (b) {
+      if (!hid[b.id]) return;
+      if (hid[b.id] === 'cap') { ncap += 1; } else { nb += 1; }
+    });
     D.nets.forEach(function (n) {
       if (!hidNet[n.id]) return;
       nn += 1;
@@ -1569,6 +1600,7 @@ EDITOR_JS = r"""
     var bits = [];
     if (showStubs) bits.push('stubs shown');
     if (nb) bits.push(nb + ' instance(s) hidden');
+    if (ncap) bits.push(ncap + ' past --max-elements');
     if (nn) {
       bits.push(nn + ' net(s) hidden' +
                 (nnRed ? ' (' + nnRed + ' one-sided!)' : ''));
@@ -1633,7 +1665,18 @@ EDITOR_JS = r"""
       });
     }
 
-    section('instances', D.boxes.filter(function (b) { return hid[b.id]; })
+    section('instances',
+      D.boxes.filter(function (b) { return hid[b.id] && hid[b.id] !== 'cap'; })
+      .map(function (b) {
+        return { label: b.name, why: b.sub,
+                 restore: function () { delete hid[b.id]; touch(); relayout(); } };
+      }));
+
+    // Not anybody's choice - the size guard trimmed these to keep the
+    // picture drawable.  They are listed because "where did that instance
+    // go" deserves an answer, and any of them can come straight back.
+    section('past --max-elements',
+      D.boxes.filter(function (b) { return hid[b.id] === 'cap'; })
       .map(function (b) {
         return { label: b.name, why: b.sub,
                  restore: function () { delete hid[b.id]; touch(); relayout(); } };
@@ -2070,7 +2113,9 @@ EDITOR_JS = r"""
                              row: Math.round(place[b.id].row) };
       });
     var hiddenNames = [], hiddenNets = [];
-    D.boxes.forEach(function (b) { if (hid[b.id]) hiddenNames.push(b.name); });
+    D.boxes.forEach(function (b) {
+      if (hid[b.id] && hid[b.id] !== 'cap') hiddenNames.push(b.name);
+    });
     D.nets.forEach(function (n) { if (hidNet[n.id]) hiddenNets.push(n.label); });
     return JSON.stringify({
       version: 1,
