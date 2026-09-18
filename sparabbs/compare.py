@@ -201,6 +201,10 @@ class Criteria:
     warn_frac: float = 0.6
     #: dB/phase statistics ignore points below this fraction of the band peak
     significance_floor: float = 0.01
+    #: a term/band below this fraction of the whole matrix's peak |Z| carries no
+    #: signal: a decoupled port pair rolls off to round-off, and normalizing
+    #: round-off by round-off reports a huge percentage for no real error
+    noise_floor: float = 1e-6
     #: when False a passivity/reciprocity violation warns but does not fail
     gate_on_checks: bool = False
     bands: tuple[tuple[str, float, float], ...] = DEFAULT_BANDS
@@ -221,6 +225,7 @@ class BandStat:
     f_lo: float
     f_hi: float
     npoints: int
+    negligible: bool
     norm_err_pct: float
     max_err_db: float
     rmse_db: float
@@ -319,12 +324,16 @@ def compare(
     z_dut, _ = apply_reference(z_dut, ref.port_names, reference)
 
     n = z_ref.shape[-1]
+    # the whole matrix's scale, so a term can be recognised as noise
+    matrix_peak = float(np.max(np.abs(z_ref))) if z_ref.size else 0.0
     terms: list[TermResult] = []
     for i in range(n):
         for j in range(n):
             if upper_triangle_only and j < i:
                 continue
-            terms.append(_term(freq, z_ref, z_dut, i, j, names, criteria))
+            terms.append(
+                _term(freq, z_ref, z_dut, i, j, names, criteria, matrix_peak)
+            )
 
     check_status = [c[1] for c in checks]
     if not criteria.gate_on_checks:
@@ -350,7 +359,7 @@ def _z0txt(z0: np.ndarray) -> str:
     return f"{z0[0]:g} ohm" if np.allclose(z0, z0[0]) else "per-port"
 
 
-def _term(freq, z_ref, z_dut, i, j, names, crit: Criteria) -> TermResult:
+def _term(freq, z_ref, z_dut, i, j, names, crit: Criteria, matrix_peak: float) -> TermResult:
     a = z_ref[:, i, j]
     b = z_dut[:, i, j]
     label = f"Z{i + 1}{j + 1}" if len(names) < 10 else f"Z({i + 1},{j + 1})"
@@ -360,36 +369,51 @@ def _term(freq, z_ref, z_dut, i, j, names, crit: Criteria) -> TermResult:
         sel = (freq >= lo) & (freq < hi)
         if not sel.any():
             continue
-        bands.append(_band_stat(name, lo, hi, freq[sel], a[sel], b[sel], crit))
+        bands.append(
+            _band_stat(name, lo, hi, freq[sel], a[sel], b[sel], crit, matrix_peak)
+        )
 
     peaks = _peak_stats(freq, a, b, crit) if i == j else []
     status = worst(*(bs.status for bs in bands), *(p.status for p in peaks))
     return TermResult(i=i + 1, j=j + 1, name=label, bands=bands, peaks=peaks, status=status)
 
 
-def _band_stat(name, lo, hi, f, a, b, crit: Criteria) -> BandStat:
+def _band_stat(name, lo, hi, f, a, b, crit: Criteria, matrix_peak: float) -> BandStat:
     peak = float(np.max(np.abs(a))) if a.size else 0.0
-    scale = peak if peak > 0 else 1.0
+    floor = crit.noise_floor * matrix_peak
+    negligible = peak <= floor
+
+    # normalize to the band's own peak, but never below the matrix noise floor:
+    # a decoupled pair sits at round-off, and dividing round-off by round-off
+    # reports hundreds of percent for an error nothing can observe
+    scale = max(peak, floor) or 1.0
     norm_err = np.abs(b - a) / scale * 100.0
 
-    keep = np.abs(a) >= crit.significance_floor * peak
-    if not keep.any():
-        keep = np.ones_like(f, dtype=bool)
-    ratio = np.abs(b[keep]) / np.maximum(np.abs(a[keep]), 1e-300)
-    err_db = 20.0 * np.log10(np.maximum(ratio, 1e-300))
-    dphase = np.angle(b[keep] / np.where(a[keep] == 0, 1e-300, a[keep]), deg=True)
+    keep = np.abs(a) >= max(crit.significance_floor * peak, floor)
+    if keep.any():
+        ratio = np.abs(b[keep]) / np.maximum(np.abs(a[keep]), 1e-300)
+        err_db = 20.0 * np.log10(np.maximum(ratio, 1e-300))
+        dphase = np.angle(b[keep] / np.where(a[keep] == 0, 1e-300, a[keep]), deg=True)
+    else:  # nothing in this band rises above the noise floor
+        err_db = np.zeros(1)
+        dphase = np.zeros(1)
 
     worst_at = int(np.argmax(norm_err))
-    status = worst(
-        crit.judge(float(np.max(norm_err)), crit.mag_err_pct),
-        crit.judge(float(np.max(np.abs(err_db))), crit.err_db),
-        crit.judge(float(np.max(np.abs(dphase))), crit.phase_err_deg),
+    status = (
+        PASS
+        if negligible
+        else worst(
+            crit.judge(float(np.max(norm_err)), crit.mag_err_pct),
+            crit.judge(float(np.max(np.abs(err_db))), crit.err_db),
+            crit.judge(float(np.max(np.abs(dphase))), crit.phase_err_deg),
+        )
     )
     return BandStat(
         name=name,
         f_lo=float(f[0]),
         f_hi=float(f[-1]),
         npoints=int(f.size),
+        negligible=negligible,
         norm_err_pct=float(np.max(norm_err)),
         max_err_db=float(np.max(np.abs(err_db))),
         rmse_db=float(np.sqrt(np.mean(err_db**2))),

@@ -845,3 +845,67 @@ class OutputWatcherTests(unittest.TestCase):
             self.dir, 6, preferred=ref, newer_than=time.time() - 1, exclude=[ref]
         )
         self.assertEqual(w.poll()[0], "")
+
+
+class NoiseFloorTests(unittest.TestCase):
+    """A decoupled port pair sits at round-off and must not drive the verdict."""
+
+    def _pair(self, coupling: float, error: float):
+        f = np.logspace(3, 9, 80)
+        z = np.zeros((f.size, 2, 2), dtype=complex)
+        z[:, 0, 0] = 1e-2 + 1j * f / 1e11
+        z[:, 1, 1] = 2e-2 + 1j * f / 1e11
+        z[:, 0, 1] = z[:, 1, 0] = coupling
+        z0 = np.full(2, 50.0)
+        ref = Network(freq=f, s=z_to_s(z, z0), z0=z0, port_names=["A", "B"])
+        zd = z.copy()
+        zd[:, 0, 1] = zd[:, 1, 0] = coupling + error
+        dut = Network(freq=f, s=z_to_s(zd, z0), z0=z0, port_names=["A", "B"])
+        return ref, dut
+
+    def test_round_off_coupling_does_not_fail_the_run(self):
+        res = cmp_mod.compare(*self._pair(coupling=1e-19, error=9e-19))
+        self.assertEqual(res.status, cmp_mod.PASS)
+
+    def test_such_a_band_is_marked_negligible(self):
+        res = cmp_mod.compare(*self._pair(coupling=1e-19, error=9e-19))
+        z12 = res.term(1, 2)
+        self.assertTrue(z12.bands, "Z12 should still be reported")
+        self.assertTrue(all(b.negligible for b in z12.bands))
+        self.assertFalse(
+            any(b.negligible for b in res.term(1, 1).bands),
+            "a self impedance is never noise",
+        )
+
+    def test_real_coupling_is_still_judged_strictly(self):
+        self.assertEqual(
+            cmp_mod.compare(*self._pair(coupling=1e-3, error=1e-3)).status, cmp_mod.FAIL
+        )
+        self.assertEqual(
+            cmp_mod.compare(*self._pair(coupling=1e-3, error=1e-5)).status, cmp_mod.PASS
+        )
+
+    def test_the_floor_is_relative_to_the_whole_matrix(self):
+        """Scaling every impedance together must not change any verdict."""
+        ref, dut = self._pair(coupling=1e-3, error=1e-3)
+        base = cmp_mod.compare(ref, dut).status
+        for net in (ref, dut):
+            net.s = z_to_s(s_to_z(net.s, net.z0) * 1e6, net.z0)
+        self.assertEqual(cmp_mod.compare(ref, dut).status, base)
+
+    def test_a_looser_floor_can_dismiss_a_weak_term(self):
+        ref, dut = self._pair(coupling=1e-9, error=1e-9)
+        strict = cmp_mod.compare(ref, dut, cmp_mod.Criteria(noise_floor=1e-12))
+        loose = cmp_mod.compare(ref, dut, cmp_mod.Criteria(noise_floor=1e-4))
+        self.assertEqual(strict.status, cmp_mod.FAIL)
+        self.assertEqual(loose.status, cmp_mod.PASS)
+
+    def test_junit_says_a_band_was_not_judged(self):
+        import xml.etree.ElementTree as ET
+
+        res = cmp_mod.compare(*self._pair(coupling=1e-19, error=9e-19))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = report_mod.write_junit(res, os.path.join(tmp, "j.xml"))
+            text = open(path, encoding="utf-8").read()
+            ET.parse(path)
+        self.assertIn("below the noise floor", text)

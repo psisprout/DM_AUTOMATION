@@ -107,6 +107,13 @@ first if its Z0 differs. Every Zᵢⱼ is scored per frequency band:
   terms from reporting meaningless percentages.
 * `max_err_db`, `rmse_db`, `max_phase_deg` — computed only where
   `|Z_ref|` is at least 1 % of the band peak, for the same reason.
+
+A term whose `|Z|` stays below `noise_floor` (1e-6) of the whole matrix's peak
+carries no signal — a decoupled port pair rolls off to round-off, and
+normalizing round-off by round-off would report hundreds of percent for an
+error nothing can observe. Those bands are marked *below noise floor*, passed
+without being judged, and named in the JUnit output so a term that was never
+really checked does not read in CI as though it had been.
 * Diagonal terms also get anti-resonance matching: peak frequency shift and
   peak `|Z|` error, which is the acceptance criterion that actually matters
   for a PDN.

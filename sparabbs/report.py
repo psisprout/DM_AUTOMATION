@@ -46,13 +46,25 @@ def write_junit(result: CompareResult, path: str, suite: str = "bbs_validation")
     for t in result.terms:
         tc = ET.SubElement(ts, "testcase", {"classname": f"{suite}.Z", "name": t.name})
         detail = "; ".join(
-            f"{b.name}: {b.norm_err_pct:.3g}% / {b.max_err_db:.3g}dB [{b.status}]"
+            f"{b.name}: "
+            + (
+                "below the noise floor, not judged"
+                if b.negligible
+                else f"{b.norm_err_pct:.3g}% / {b.max_err_db:.3g}dB [{b.status}]"
+            )
             for b in t.bands
         )
+        skipped = [b.name for b in t.bands if b.negligible]
         if t.status == "FAIL":
             ET.SubElement(tc, "failure", {"message": detail})
         elif t.status == "WARN":
             ET.SubElement(tc, "system-out").text = f"WARN: {detail}"
+        elif skipped:
+            # a term that passed without being looked at should say so, rather
+            # than reading in CI as though it had been checked
+            ET.SubElement(tc, "system-out").text = (
+                "below the noise floor, not judged: " + ", ".join(skipped)
+            )
     tree = ET.ElementTree(ts)
     _indent(ts)
     tree.write(path, encoding="utf-8", xml_declaration=True)

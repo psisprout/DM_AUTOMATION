@@ -618,7 +618,7 @@ class MainWindow(QtCore.QObject):
             for b in t.bands:
                 child = QtWidgets.QTreeWidgetItem(
                     [
-                        b.name,
+                        b.name + ("  (below noise floor)" if b.negligible else ""),
                         f"{b.norm_err_pct:.3g}",
                         f"{b.max_err_db:.3g}",
                         f"{b.rmse_db:.3g}",
