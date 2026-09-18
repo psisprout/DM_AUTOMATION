@@ -30,6 +30,13 @@ class CompareError(ValueError):
     """Raised when two networks cannot be compared."""
 
 
+def _ratio(value: float, limit: float) -> float:
+    """value/limit, with a non-finite metric treated as a hard failure."""
+    if not np.isfinite(value):
+        return float("inf")
+    return value / limit if limit > 0 else float("inf")
+
+
 def worst(*statuses: str) -> str:
     return max(statuses, key=lambda s: _RANK.get(s, 0)) if statuses else PASS
 
@@ -277,6 +284,36 @@ class CompareResult:
             if (t.i, t.j) == (i, j):
                 return t
         raise KeyError(f"no term Z{i}{j}")
+
+    def headroom(self) -> float:
+        """Worst metric as a fraction of its limit, over every judged term.
+
+        1.0 sits exactly on a threshold, above 1.0 something failed.  Ranking
+        candidates needs a number: PASS / WARN / FAIL cannot order two models
+        that both pass.  Bands below the noise floor were not judged and are
+        left out.
+        """
+        crit = self.criteria
+        ratios = [0.0]
+        for term in self.terms:
+            for b in term.bands:
+                if b.negligible:
+                    continue
+                ratios += [
+                    _ratio(b.norm_err_pct, crit.mag_err_pct),
+                    _ratio(b.max_err_db, crit.err_db),
+                    _ratio(b.max_phase_deg, crit.phase_err_deg),
+                ]
+            for pk in term.peaks:
+                ratios += [
+                    _ratio(pk.shift_pct, crit.peak_shift_pct),
+                    _ratio(pk.mag_err_pct, crit.peak_mag_err_pct),
+                ]
+        return max(ratios)
+
+    def margin(self) -> float:
+        """``1 - headroom``: positive passes, negative fails, bigger is better."""
+        return 1.0 - self.headroom()
 
     def counts(self) -> dict[str, int]:
         out = {PASS: 0, WARN: 0, FAIL: 0}

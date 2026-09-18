@@ -152,6 +152,63 @@ figure, and tab 5 plots them. For a CI gate, *Save JUnit XML* (or `--junit`)
 writes one testcase per Z term, and the CLI exits non-zero on a failing
 comparison.
 
+### Agent-driven flow
+
+The conversion itself runs in AEDT's Network Data Explorer GUI, so the flow is
+split into scripts an agent runs one at a time, with the GUI step in the middle.
+`skills/` holds a `SKILL.md` per agent step.
+
+| Step | Who | What |
+|---|---|---|
+| 1 | `sparabbs.dcr` | port names → user picks the reference node → DCR per remaining port, and the renorm ladder to try |
+| 2 | you | an NDE script that converts at each renorm impedance |
+| 3 | AEDT GUI | a person runs it, producing `a_sp_0p00776.sp` and friends |
+| 4 | `sparabbs.batch` | compare every candidate, rank, write JSON |
+| 5 | agent | report the winner from that JSON |
+
+```bash
+python -m sparabbs.dcr --snp a.s3p --list-ports          # names to ask with
+python -m sparabbs.dcr --snp a.s3p --reference VDD_PMIC --json dcr.json
+# ... NDE runs happen here ...
+python -m sparabbs.batch --snp a.s3p a_sp_*.sp --ref-mode port --ref-ports 3 --out cmp
+```
+
+**The reference port is matched by exact name only.** A typo exits 3 and lists
+the real names rather than picking the nearest one — silently referencing the
+wrong rail would invalidate every number downstream while looking entirely
+normal. Only whitespace and letter case are forgiven. An index is accepted,
+since a number cannot be a near-miss.
+
+#### Choosing the renorm impedances
+
+A relative error `dS` in S lands in Z amplified by `(Z + z0)² / (2·z0·Z)`. That
+is smallest at `z0 = Z`, and across a range of impedances the worst case is
+balanced at the **geometric centre, `√(Zmin·Zmax)`**, where the amplification is
+`√(Zmax/Zmin)/2`. So:
+
+* Anchor the ladder on the geometric centre, not on DCR. DCR is `Zmin` — the
+  bottom of the range — and the centre usually sits one to two decades above it.
+* Half-decade steps are enough; the curve is shallow near its minimum.
+* A wide `|Z|` span is a hard limit, not a tuning problem. Three decades already
+  costs ~16× amplification at the best possible `z0`, so if nothing in the sweep
+  passes and headroom is flat across it, no renorm impedance will fix it.
+* 50 Ω is hopeless for a milliohm PDN — four decades off centre, ~2.5e4×
+  amplification. A fit that looks excellent in S is worthless in Z.
+
+`sparabbs.dcr` computes the centre from the file and prints the ladder plus the
+`0p00776`-style labels for naming the NDE runs.
+
+#### What the agent reads
+
+`compare.json` carries `candidates[]` (each with `renorm_ohm`, `status`,
+`headroom`, `margin`, `error`), `ranking` best-first, `best`, and
+`any_accepted`. `headroom` is the worst metric as a fraction of its limit —
+below 1 passes, smaller is better — which is what orders two models that both
+pass. Exit code is 0 when something was accepted, 1 when nothing was.
+
+A candidate that is already a Touchstone file is compared directly with no
+simulation, so re-ranking against different criteria costs nothing.
+
 ### Batch use
 
 ```bash
@@ -178,11 +235,14 @@ sparabbs/
   compare.py      reference-node transforms, banding, metrics, verdicts
   plotting.py     term selection idioms and the plots themselves
   report.py       JUnit output for CI
-  cli.py          headless driver
+  cli.py          headless driver for one model
+  dcr.py          reference node, DCR, renorm sizing
+  batch.py        compare and rank several BBS candidates
   gui/
     main_window.ui  Qt Designer layout (XML)
     qtcompat.py     PyQt5 / PyQt6 / PySide2 / PySide6 shim
     app.py          window logic
+skills/          one SKILL.md per agent step
 tests/
   make_fixtures.py  synthetic 3-port PDN used by the tests
   test_engine.py    engine tests
