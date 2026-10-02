@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --ink: #1d2330; --muted: #5d6677;
+    --line: #dde1e8; --accent: #1f5fbf; --chip: #eef1f6;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 13px/1.45 -apple-system, "Segoe UI", Roboto, "Noto Sans KR", Arial, sans-serif; }
+  header { padding: 14px 20px 6px; }
+  h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  .meta { color: var(--muted); margin-top: 2px; }
+  .bar { position: sticky; top: 0; z-index: 10; background: var(--bg);
+         border-bottom: 1px solid var(--line); padding: 8px 20px;
+         display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; }
+  .bar label { white-space: nowrap; }
+  .grp { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+  .grp > b { color: var(--muted); font-weight: 600; margin-right: 2px; }
+  .chip { background: var(--chip); border: 1px solid var(--line); border-radius: 12px;
+          padding: 1px 8px; cursor: pointer; user-select: none; }
+  .chip.off { opacity: .4; text-decoration: line-through; }
+  input[type=search] { width: 280px; padding: 4px 8px; border: 1px solid var(--line);
+                       border-radius: 4px; font: inherit; }
+  select, button { font: inherit; }
+  .count { color: var(--muted); }
+  .dash { display: inline-block; width: 26px; height: 0; border-top: 2px solid var(--ink);
+          vertical-align: middle; margin-right: 4px; }
+  .dash.dash-dash { border-top-style: dashed; } .dash.dash-dot { border-top-style: dotted; }
+  .dash.dash-dashdot, .dash.dash-longdash, .dash.dash-longdashdot { border-top-style: dashed; }
+  main { display: grid; gap: 12px; padding: 12px 20px 40px; grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 4px; min-width: 0; }
+  .plot { height: var(--h, 460px); }
+  .empty { padding: 40px; text-align: center; color: var(--muted); }
+  .help { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title"></h1>
+  <div class="meta" id="meta"></div>
+</header>
+<div class="bar">
+  <label>Search <input type="search" id="q" placeholder="DQ3   or   FEXT DQ   or   /PSXT.*DQ[0-3]$/"></label>
+  <div class="grp" id="models"><b>Models</b></div>
+  <div class="grp" id="metrics"><b>Metrics</b></div>
+  <label>Columns <select id="cols"><option>1</option><option selected>2</option><option>3</option></select></label>
+  <label>Height <select id="height"><option value="340">S</option><option value="460" selected>M</option><option value="640">L</option></select></label>
+  <label><input type="checkbox" id="nyq" checked> Nyquist markers</label>
+  <label><input type="checkbox" id="legend" checked> Legends</label>
+  <span class="count" id="count"></span>
+</div>
+<main id="panels"></main>
+<script type="application/json" id="data">/*__DATA__*/</script>
+<script>/*__PLOTLY__*/</script>
+<script>
+(function () {
+  "use strict";
+  var D = JSON.parse(document.getElementById("data").textContent);
+  var state = { q: "", models: {}, metrics: {}, nyq: true, legend: true };
+  D.models.forEach(function (m, i) { state.models[i] = true; });
+  D.metrics.forEach(function (m) { state.metrics[m] = true; });
+
+  document.getElementById("title").textContent = D.title;
+  var meta = "Generated " + D.generated + " · " + D.panels.length + " panel(s)";
+  if (D.split_by.length) meta += " · split by " + D.split_by.join(", ");
+  meta += " · Nyquist from " + D.speed.default_gbps + " Gbps";
+  var ov = Object.keys(D.speed.groups);
+  if (ov.length) meta += " (" + ov.map(function (g) { return g + " " + D.speed.groups[g]; }).join(", ") + ")";
+  document.getElementById("meta").textContent = meta;
+
+  function chip(parent, html, title, on, toggle) {
+    var el = document.createElement("span");
+    el.className = "chip" + (on ? "" : " off");
+    el.innerHTML = html;
+    el.title = title;
+    el.addEventListener("click", function () {
+      var now = toggle();
+      el.classList.toggle("off", !now);
+      refresh();
+    });
+    parent.appendChild(el);
+  }
+  var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; }); };
+  var mdiv = document.getElementById("models");
+  D.models.forEach(function (m, i) {
+    chip(mdiv, '<span class="dash dash-' + m.dash + '"></span>' + esc(m.alias), m.path, true,
+         function () { state.models[i] = !state.models[i]; return state.models[i]; });
+  });
+  if (D.models.length < 2) mdiv.style.display = "none";
+  var kdiv = document.getElementById("metrics");
+  D.metrics.forEach(function (k) {
+    chip(kdiv, esc(k), "show / hide " + k, true,
+         function () { state.metrics[k] = !state.metrics[k]; return state.metrics[k]; });
+  });
+  if (D.metrics.length < 2) kdiv.style.display = "none";
+
+  function matcher(q) {
+    q = q.trim();
+    if (!q) return function () { return true; };
+    if (q.length > 2 && q[0] === "/" && q[q.length - 1] === "/") {
+      try { var rx = new RegExp(q.slice(1, -1), "i"); return function (s) { return rx.test(s); }; }
+      catch (e) { /* fall through to words */ }
+    }
+    var words = q.toLowerCase().split(/\s+/);
+    return function (s) {
+      s = s.toLowerCase();
+      for (var i = 0; i < words.length; i++) if (s.indexOf(words[i]) < 0) return false;
+      return true;
+    };
+  }
+
+  var main = document.getElementById("panels");
+  var cards = D.panels.map(function (p, i) {
+    var card = document.createElement("div");
+    card.className = "card";
+    var div = document.createElement("div");
+    div.className = "plot";
+    card.appendChild(div);
+    main.appendChild(card);
+    return { p: p, card: card, div: div, rendered: false, dirty: true, near: false, shown: [] };
+  });
+
+  function visibleTraces(p) {
+    var match = matcher(state.q);
+    return p.traces.filter(function (t) {
+      return state.models[t.m] && state.metrics[t.metric] && match(t.name);
+    });
+  }
+
+  function render(c) {
+    var traces = c.shown;
+    var points = 0;
+    traces.forEach(function (t) { points += t.y.length; });
+    var type = points > 150000 ? "scattergl" : "scatter";
+    var data = traces.map(function (t) {
+      return {
+        type: type, mode: "lines", name: t.name, legendgroup: t.label,
+        x: D.models[t.m].freq, y: t.y,
+        line: { color: t.c, dash: t.d, width: 1.5 },
+        hovertemplate: "%{x:.4g} GHz<br>%{y:.2f} dB<extra>" + esc(t.name) + "</extra>"
+      };
+    });
+    var shapes = [], notes = [];
+    if (state.nyq) c.p.nyq.forEach(function (f) {
+      shapes.push({ type: "line", xref: "x", yref: "paper", x0: f, x1: f, y0: 0, y1: 1,
+                    line: { color: "#888", width: 1, dash: "dot" } });
+      notes.push({ xref: "x", yref: "paper", x: f, y: 1, yanchor: "bottom", showarrow: false,
+                   text: "Nyq " + f + " GHz", font: { size: 10, color: "#666" } });
+    });
+    var layout = {
+      title: { text: esc(c.p.title), font: { size: 14 } },
+      margin: { l: 56, r: 10, t: 40, b: 44 },
+      xaxis: { title: { text: "Frequency (GHz)" }, zeroline: false },
+      yaxis: { title: { text: "dB" }, zeroline: false },
+      hovermode: "closest", showlegend: state.legend,
+      legend: { font: { size: 10 } },
+      shapes: shapes, annotations: notes,
+      paper_bgcolor: "#fff", plot_bgcolor: "#fff"
+    };
+    Plotly.react(c.div, data, layout, { responsive: true, displaylogo: false,
+      toImageButtonOptions: { format: "png", scale: 2, filename: c.p.title } });
+    c.rendered = true;
+    c.dirty = false;
+  }
+
+  function purge(c) {
+    if (c.rendered) { Plotly.purge(c.div); c.rendered = false; c.dirty = true; }
+  }
+
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      var c = cards[+e.target.dataset.i];
+      c.near = e.isIntersecting;
+      if (c.near && (c.dirty || !c.rendered)) render(c);
+      else if (!c.near) purge(c);   // frees WebGL contexts of panels far away
+    });
+  }, { rootMargin: "800px 0px" });
+  cards.forEach(function (c, i) { c.card.dataset.i = i; io.observe(c.card); });
+
+  function refresh() {
+    var total = 0, panels = 0;
+    cards.forEach(function (c) {
+      c.shown = visibleTraces(c.p);
+      total += c.shown.length;
+      var has = c.shown.length > 0;
+      if (has) panels++;
+      c.card.style.display = has ? "" : "none";
+      if (!has) purge(c);
+      c.dirty = true;
+      if (has && c.near) render(c);
+    });
+    document.getElementById("count").textContent = total + " curve(s) in " + panels + " panel(s)";
+    var empty = document.getElementById("empty");
+    if (!panels && !empty) {
+      empty = document.createElement("div");
+      empty.id = "empty"; empty.className = "empty";
+      empty.textContent = "Nothing matches the search and toggles.";
+      main.appendChild(empty);
+    } else if (panels && empty) empty.remove();
+  }
+
+  var timer = null;
+  document.getElementById("q").addEventListener("input", function (e) {
+    clearTimeout(timer);
+    timer = setTimeout(function () { state.q = e.target.value; refresh(); }, 250);
+  });
+  document.getElementById("cols").addEventListener("change", function (e) {
+    main.style.setProperty("--cols", e.target.value);
+    cards.forEach(function (c) { if (c.rendered) Plotly.Plots.resize(c.div); });
+  });
+  document.getElementById("height").addEventListener("change", function (e) {
+    main.style.setProperty("--h", e.target.value + "px");
+    cards.forEach(function (c) { if (c.rendered) Plotly.Plots.resize(c.div); });
+  });
+  document.getElementById("nyq").addEventListener("change", function (e) { state.nyq = e.target.checked; refresh(); });
+  document.getElementById("legend").addEventListener("change", function (e) { state.legend = e.target.checked; refresh(); });
+
+  var cols = D.panels.length > 1 ? 2 : 1;
+  document.getElementById("cols").value = String(cols);
+  main.style.setProperty("--cols", cols);
+  refresh();
+})();
+</script>
+</body>
+</html>
