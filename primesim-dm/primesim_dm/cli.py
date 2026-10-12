@@ -378,8 +378,9 @@ def cmd_graph(args):
         header.append("%d file(s) skipped, their elements are not drawn"
                       % len(dk.skipped_files))
     if g.dropped:
-        header.append("%d least-connected element(s) not drawn (--max-elements)"
-                      % g.dropped)
+        header.append("%d least-connected element(s) not drawn - listed "
+                      "under 'past --max-elements'; raise --max-elements "
+                      "(or 0) to keep them" % g.dropped)
 
     title = os.path.basename(args.deck[0])
     if fmt == "dot":
@@ -568,9 +569,11 @@ def build_parser():
     s.add_argument("--save-layout", metavar="FILE",
                    help="write the arrangement being drawn to a layout file, "
                         "as a starting point to edit")
-    s.add_argument("--max-elements", type=int, default=80, metavar="N",
-                   help="draw at most N elements, the best-connected first "
-                        "(default 80)")
+    s.add_argument("--max-elements", type=int,
+                   default=graph_mod.DEFAULT_MAX_ELEMENTS, metavar="N",
+                   help="draw at most N elements, the best-connected first, "
+                        "sources kept ahead of the rest (default %d). "
+                        "0 for no limit" % graph_mod.DEFAULT_MAX_ELEMENTS)
     s.add_argument("--no-includes", action="store_true")
     s.add_argument("--search-dir", action="append")
     s.add_argument("--opaque", action="append", metavar="REGEX")

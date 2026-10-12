@@ -738,3 +738,31 @@ XD a2 d0 sub
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MaxElementsDefaultTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_deck_of_a_couple_hundred_is_drawn_whole(self):
+        # the decks being checked run to a few hundred elements, and a
+        # guard that trims those is trimming on every single run
+        body = ["* t"]
+        for i in range(150):
+            body.append("XBLK%d n%d m%d sub" % (i, i, i))
+        g = graph_mod.build(read_text(self.tmp, "\n".join(body) + "\n"))
+        self.assertEqual(g.dropped, 0)
+        self.assertEqual(len(g.boxes), 150)
+
+    def test_the_guard_is_still_there_for_a_flattened_netlist(self):
+        body = ["* t"]
+        for i in range(graph_mod.DEFAULT_MAX_ELEMENTS + 50):
+            body.append("XBLK%d n%d m%d sub" % (i, i, i))
+        g = graph_mod.build(read_text(self.tmp, "\n".join(body) + "\n"))
+        self.assertEqual(len(g.boxes), graph_mod.DEFAULT_MAX_ELEMENTS)
+        self.assertEqual(g.dropped, 50)
