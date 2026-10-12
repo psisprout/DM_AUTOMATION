@@ -1069,6 +1069,26 @@ body.editing #scene .node.lift { cursor: grabbing; opacity: 0.85; }
 #inspectbody .line .k { color: #8794a6; min-width: 74px; }
 #inspectbody .line .v { flex: 1; word-break: break-all; }
 #inspectbody .why { padding: 4px 9px; color: #6d5720; background: #fbf7ec; }
+/* What an import actually did, in numbers.  A layout keys on names, so one
+   from another deck half-applies; saying nothing would leave that looking
+   like the file was wrong rather than aimed at the wrong deck. */
+#report {
+  position: absolute; left: 50%; top: 10px; transform: translateX(-50%);
+  width: 420px; max-height: 60%; display: none; flex-direction: column;
+  background: #ffffff; border: 1px solid #b6c0cd; border-radius: 6px;
+  overflow: hidden; box-shadow: 0 4px 16px rgba(20,30,45,0.18);
+}
+#report.on { display: flex; }
+#reporthead {
+  display: flex; gap: 8px; align-items: center; padding: 6px 9px;
+  border-bottom: 1px solid #e2e7ee; font-weight: 600;
+}
+#reporthead button { margin-left: auto; padding: 1px 6px; }
+#reportbody { overflow-y: auto; padding: 5px 0 7px; }
+#reportbody .line { display: flex; gap: 8px; padding: 2px 9px; }
+#reportbody .line .k { color: #8794a6; min-width: 96px; }
+#reportbody .line .v { flex: 1; word-break: break-all; }
+#reportbody .bad { padding: 4px 9px; color: #90291d; background: #fdecea; }
 #scene .node.crossed rect { stroke: #8a93a0; stroke-dasharray: 5 3; }
 @media (prefers-color-scheme: dark) {
   #edit.on { background: #24405e; border-color: #5b86bd; }
@@ -1092,6 +1112,11 @@ body.editing #scene .node.lift { cursor: grabbing; opacity: 0.85; }
   #inspecthead { border-bottom-color: #2b3541; }
   #inspecthead .sub, #inspectbody .line .k { color: #93a3b8; }
   #inspectbody .why { color: #d8c08a; background: #241f13; }
+  #report { background: #171d25; border-color: #3d4957;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
+  #reporthead { border-bottom-color: #2b3541; }
+  #reportbody .line .k { color: #93a3b8; }
+  #reportbody .bad { color: #f0a596; background: #33191a; }
 }
 @media (prefers-color-scheme: dark) {
   body { background: #12161c; color: #e8edf4; }
@@ -1400,6 +1425,11 @@ EDITOR_JS = r"""
   function relayout() {
     var layers = {};
     layerCache = {};
+    // a node left out of this pass has no position: clearing it keeps a
+    // stale one from an earlier pass out of the bounds the column headings
+    // are measured against
+    D.boxes.concat(D.nets).forEach(function (n) {
+      n.nx = undefined; n.ny = undefined; });
     D.boxes.forEach(function (b) {
       if (hid[b.id]) return;
       var lay = place[b.id].col * 2;
@@ -2068,6 +2098,159 @@ EDITOR_JS = r"""
     return moved;
   };
 
+
+  // ---- reading a layout back in -----------------------------------------
+  // A layout is matched to this deck by name, so one made against another
+  // deck lands only partly.  Every import says in numbers what it did,
+  // because a half-applied file looks exactly like a broken one.
+  var report = document.getElementById('report');
+  var reportHead = document.getElementById('reporthead');
+  var reportBody = document.getElementById('reportbody');
+
+  function reportLine(k, v) {
+    var row = document.createElement('div');
+    row.className = 'line';
+    var a = document.createElement('span');
+    a.className = 'k';
+    a.textContent = k;
+    var b = document.createElement('span');
+    b.className = 'v';
+    b.textContent = v;
+    row.appendChild(a); row.appendChild(b);
+    reportBody.appendChild(row);
+  }
+
+  function showReport(title, lines, bad) {
+    reportHead.textContent = '';
+    reportBody.textContent = '';
+    var h = document.createElement('span');
+    h.textContent = title;
+    reportHead.appendChild(h);
+    var x = document.createElement('button');
+    x.textContent = 'close';
+    x.onclick = function () { report.classList.remove('on'); };
+    reportHead.appendChild(x);
+    if (bad) {
+      var d = document.createElement('div');
+      d.className = 'bad';
+      d.textContent = bad;
+      reportBody.appendChild(d);
+    }
+    lines.forEach(function (l) { reportLine(l[0], l[1]); });
+    report.classList.add('on');
+  }
+
+  function applyLayout(raw, fileName) {
+    var data;
+    try {
+      data = JSON.parse(raw);
+    } catch (err) {
+      showReport('layout not read', [], 'not valid JSON: ' + err.message);
+      return;
+    }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      showReport('layout not read', [], 'expected an object at the top');
+      return;
+    }
+    var cList = data.columns;
+    if (!cList || !cList.length) {
+      showReport('layout not read', [], 'no columns in the file');
+      return;
+    }
+    var names = cList.map(function (c, i) {
+      return (c && c.name !== undefined) ? String(c.name)
+                                         : (typeof c === 'string' ? c
+                                            : 'column ' + (i + 1));
+    });
+    var elems = data.elements || {};
+
+    var byName = {}, byLabel = {};
+    D.boxes.forEach(function (b) { byName[b.name] = b.id; });
+    D.nets.forEach(function (n) { byLabel[n.label] = n.id; });
+
+    var placed = 0, strangers = [], missing = [];
+    var next = {};
+    Object.keys(elems).forEach(function (name) {
+      var id = byName[name];
+      if (!id) { strangers.push(name); return; }
+      var spec = elems[name] || {};
+      var col = Math.max(0, Math.min(names.length - 1, spec.column | 0));
+      next[id] = { col: col, row: Number(spec.row) || 0 };
+      placed += 1;
+    });
+    D.boxes.forEach(function (b) {
+      if (!next[b.id]) missing.push(b.name);
+    });
+    if (missing.length) {
+      // same answer the generator gives: what the file never heard of goes
+      // in a column of its own rather than somewhere it might pass unnoticed
+      names.push('unplaced');
+      missing.forEach(function (name, i) {
+        next[byName[name]] = { col: names.length - 1, row: i };
+      });
+    }
+
+    // the size guard's doing is not part of a layout, so it survives one
+    var keptCap = {};
+    Object.keys(hid).forEach(function (id) {
+      if (hid[id] === 'cap') keptCap[id] = 'cap';
+    });
+
+    var hidNames = data.hidden || [], hidLabels = data.hidden_nets || [];
+    var hidStrangers = 0;
+    hid = keptCap;
+    hidNames.forEach(function (name) {
+      if (byName[name]) { hid[byName[name]] = 'file'; } else { hidStrangers += 1; }
+    });
+    hidNet = {};
+    hidLabels.forEach(function (label) {
+      if (byLabel[label]) { hidNet[byLabel[label]] = 'file'; } else { hidStrangers += 1; }
+    });
+
+    cols = names;
+    place = next;
+    cur = Math.min(Math.max(cur, 0), cols.length - 1);
+    changed = true;
+    select(cur);
+    relayout();
+    window.__fit();
+
+    var lines = [
+      ['columns', String(cols.length) + (missing.length ? ' (+unplaced)' : '')],
+      ['instances', placed + ' of ' + D.boxes.length + ' placed'],
+      ['hidden', hidNames.length + ' instance(s), ' + hidLabels.length + ' net(s)']
+    ];
+    if (strangers.length) {
+      lines.push(['not in deck', strangers.slice(0, 12).join(', ') +
+                  (strangers.length > 12 ? ', ... (' + strangers.length + ')' : '')]);
+    }
+    if (missing.length) {
+      lines.push(['not in file', missing.slice(0, 12).join(', ') +
+                  (missing.length > 12 ? ', ... (' + missing.length + ')' : '') +
+                  '  -> unplaced']);
+    }
+    if (hidStrangers) {
+      lines.push(['hidden misses', hidStrangers + ' name(s) not in this deck']);
+    }
+    showReport('layout applied: ' + (fileName || 'layout.json'), lines, null);
+  }
+
+  var loadInput = document.getElementById('loadfile');
+  document.getElementById('load').onclick = function () {
+    loadInput.value = '';          // same file twice still fires a change
+    loadInput.click();
+  };
+  loadInput.addEventListener('change', function () {
+    var f = loadInput.files && loadInput.files[0];
+    if (!f) return;
+    var r = new FileReader();
+    r.onload = function () { applyLayout(String(r.result), f.name); };
+    r.onerror = function () {
+      showReport('layout not read', [], 'the browser could not read ' + f.name);
+    };
+    r.readAsText(f);
+  });
+
   // ---- the toolbar -----------------------------------------------------
   document.getElementById('edit').onclick = function () {
     editing = !editing;
@@ -2228,6 +2411,8 @@ def render_html(g, title="deck connectivity", header=(), layout=None):
     <button id="stubs" title="show the nets that were dropped along with a hidden instance">stubs</button>
     <button id="hidden" title="list what is hidden and put back the ones you want">hidden\u2026</button>
     <button id="showall" title="bring everything hidden back">show all</button>
+    <button id="load" title="read a layout.json and arrange this page by it">load layout\u2026</button>
+    <input id="loadfile" type="file" accept=".json,application/json" hidden>
     <button id="save">save layout.json</button>
     <button id="copy">copy</button>
     <button id="revert">revert</button>
@@ -2250,6 +2435,7 @@ def render_html(g, title="deck connectivity", header=(), layout=None):
   <div id="panelbody"></div>
 </div>
 <div id="inspect"><div id="inspecthead"></div><div id="inspectbody"></div></div>
+<div id="report"><div id="reporthead"></div><div id="reportbody"></div></div>
 <div id="hint">wheel: zoom &middot; drag: pan &middot; click: trace a net
 &middot; editing: shift+drag to box-select, double-click for siblings</div>
 </div>

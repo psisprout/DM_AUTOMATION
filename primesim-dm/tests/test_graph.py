@@ -533,6 +533,30 @@ class HtmlTest(unittest.TestCase):
         self.assertIn("#dropzones, #dropline, #band { pointer-events: none; }",
                       html)
 
+    def test_the_viewer_can_read_a_layout_back_in(self):
+        html = graph_mod.render_html(self.graph())
+        self.assertIn('id="load"', html)
+        self.assertIn('id="loadfile"', html)
+        self.assertIn("FileReader", html)
+        # a user-picked file is readable on a file:// page; a path is not,
+        # so this is the only way in without a server
+        self.assertIn('type="file"', html)
+
+    def test_an_import_says_in_numbers_what_it_did(self):
+        html = graph_mod.render_html(self.graph())
+        self.assertIn('id="report"', html)
+        for line in ("layout applied", "not in deck", "not in file",
+                     "of ' + D.boxes.length + ' placed"):
+            self.assertIn(line, html)
+        # a file that is not JSON is reported, not shrugged off
+        self.assertIn("not valid JSON", html)
+
+    def test_an_import_leaves_the_size_guard_alone(self):
+        # what --max-elements trimmed is not part of anyone's layout, so a
+        # layout that does not mention it must not un-hide it either
+        html = graph_mod.render_html(self.graph())
+        self.assertIn("if (hid[id] === 'cap') keptCap[id] = 'cap';", html)
+
     def test_the_viewer_tells_the_two_kinds_of_hidden_apart(self):
         html = graph_mod.render_html(self.graph())
         self.assertIn("past --max-elements", html)
