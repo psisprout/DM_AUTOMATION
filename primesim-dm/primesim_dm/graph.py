@@ -48,6 +48,14 @@ PASSIVE_KINDS = ("R", "C", "L")
 # one.
 SOURCE_KINDS = ("V", "I")
 
+# How many elements to draw before the size guard trims.  Set from measuring
+# rather than taste: a 900-element page loads in under half a second and
+# re-lays-out in 22ms, so this is not about speed.  It is a backstop against
+# a flattened netlist nobody meant to draw, and it wants to sit well above
+# the decks people actually check - 80 was below them, and cut the picture
+# every run.
+DEFAULT_MAX_ELEMENTS = 400
+
 
 def _stem(net):
     """('dq<7>') -> ('dq', 7); a net with no index -> (net, None)."""
@@ -213,7 +221,7 @@ def _net_filter(patterns):
     return match
 
 
-def build(deck, rails=DEFAULT_RAILS, group_buses=True, max_elements=80,
+def build(deck, rails=DEFAULT_RAILS, group_buses=True, max_elements=DEFAULT_MAX_ELEMENTS,
           hide=(), only=(), hide_names=(), hide_nets=(), hide_net_names=(),
           keep_hidden=False):
     """Turn a parsed :class:`deck.Deck` into a drawable graph.
