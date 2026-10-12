@@ -1023,6 +1023,9 @@ body.editing #scene .node.lift { cursor: grabbing; opacity: 0.85; }
 #scene .node.sel rect.box { fill: #dcebff; }
 #selinfo { color: #2f6fb5; }
 #hideinfo { color: #b06a00; }
+#findinfo { color: #5c6b80; }
+#findinfo.bad, input.bad { color: #90291d; }
+input.bad { border-color: #c0392b; }
 #scene .gone { display: none; }
 #panel {
   position: absolute; top: 8px; right: 8px; width: 260px; max-height: 82%;
@@ -1100,6 +1103,9 @@ body.editing #scene .node.lift { cursor: grabbing; opacity: 0.85; }
   #scene .node.sel rect.box { fill: #2b3a4d; }
   #selinfo { color: #8fb4d9; }
   #hideinfo { color: #e0a952; }
+  #findinfo { color: #93a3b8; }
+  #findinfo.bad, input.bad { color: #f0a596; }
+  input.bad { border-color: #e2725f; }
   #scene .node.crossed rect { stroke: #7d8795; }
   #panel { background: #171d25; border-color: #3d4957;
            box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
@@ -1269,6 +1275,43 @@ VIEWER_JS = r"""
     k = 1; tx = ty = 0; apply();
   };
 
+  // A net label can be dq[0:7] or clk<3>, which is also valid regex syntax
+  // meaning something else entirely.  So plain text stays a plain substring
+  // and /.../ is the way in to a pattern - typing what you see on a pill
+  // can never quietly match the wrong thing.
+  var findinfo = document.getElementById('findinfo');
+
+  function matcher(q) {
+    q = q.trim();
+    if (!q) return { empty: true };
+    var m = /^\/(.*)\/([a-z]*)$/.exec(q);
+    if (!m) {
+      var lower = q.toLowerCase();
+      return { test: function (hay) {
+        return hay.toLowerCase().indexOf(lower) >= 0; } };
+    }
+    try {
+      var rx = new RegExp(m[1], m[2].indexOf('i') >= 0 ? m[2] : m[2] + 'i');
+      // Matched field by field, not against the whole haystack: that
+      // string is the name and the subckt and every net behind a bus run
+      // together, and ^...$ against it can never match anything. Anchors
+      // are most of the reason to reach for a pattern in the first place.
+      return { regex: true, test: function (hay) {
+        var parts = hay.split(/\s+/);
+        for (var i = 0; i < parts.length; i++) {
+          if (parts[i] && rx.test(parts[i])) return true;
+        }
+        return false;
+      } };
+    } catch (err) {
+      return { bad: err.message };
+    }
+  }
+
+  function hayOf(el) {
+    return el.getAttribute('data-search') || '';
+  }
+
   var nodes = [].slice.call(scene.querySelectorAll('.node'));
   var wires = [].slice.call(scene.querySelectorAll('.wire-of'));
 
@@ -1314,24 +1357,40 @@ VIEWER_JS = r"""
   });
 
   find.addEventListener('input', function () {
-    var q = find.value.trim().toLowerCase();
-    if (!q) { clear(); return; }
-    var hit = {};
+    var m = matcher(find.value);
+    find.classList.toggle('bad', !!m.bad);
+    findinfo.classList.toggle('bad', !!m.bad);
+    if (m.bad) {
+      // a pattern that will not compile matches nothing, which looks
+      // exactly like a pattern that found nothing
+      findinfo.textContent = 'bad regex: ' + m.bad;
+      return;
+    }
+    if (m.empty) { findinfo.textContent = ''; clear(); return; }
+    var hit = {}, n_hit = 0;
     nodes.forEach(function (n) {
-      var on = (n.dataset.search || '').toLowerCase().indexOf(q) >= 0;
+      var on = m.test(hayOf(n));
       n.classList.toggle('dim', !on);
       n.classList.remove('hot');
-      if (on) hit[n.id] = 1;
+      if (on) { hit[n.id] = 1; n_hit += 1; }
     });
     wires.forEach(function (w) {
       var on = hit[w.dataset.net] || hit[w.dataset.box];
       w.classList.toggle('dim', !on);
       w.classList.remove('hot-wire');
     });
+    findinfo.textContent = n_hit + ' found' + (m.regex ? ' (regex)' : '');
   });
 
   document.addEventListener('keydown', function (e) {
-    if (e.target === find) { if (e.key === 'Escape') { find.value = ''; clear(); find.blur(); } return; }
+    if (e.target === find) {
+      if (e.key === 'Escape') {
+        find.value = ''; find.classList.remove('bad');
+        findinfo.textContent = ''; findinfo.classList.remove('bad');
+        clear(); find.blur();
+      }
+      return;
+    }
     if (e.key === '0' || e.key === 'f') fit();
     else if (e.key === '+' || e.key === '=') document.getElementById('in').click();
     else if (e.key === '-') document.getElementById('out').click();
@@ -1341,6 +1400,7 @@ VIEWER_JS = r"""
 
   // the editor compares against untransformed scene coordinates, so it
   // needs the pan and zoom taken back out of the pointer position
+  window.__matcher = matcher;
   window.__toScene = function (p) {
     return { x: (p.x - tx) / k, y: (p.y - ty) / k };
   };
@@ -1962,13 +2022,14 @@ EDITOR_JS = r"""
   };
 
   document.getElementById('selfound').onclick = function () {
-    var q = (document.getElementById('find').value || '').trim().toLowerCase();
-    if (!q) { alert('type something in the find box first'); return; }
+    var m = window.__matcher(document.getElementById('find').value);
+    if (m.bad) { alert('that is not a valid regex: ' + m.bad); return; }
+    if (m.empty) { alert('type something in the find box first'); return; }
     var hit = [];
     D.boxes.concat(D.nets).forEach(function (n) {
       var el = document.getElementById(n.id);
       var hay = (el && el.getAttribute('data-search')) || n.name || n.label;
-      if (hay.toLowerCase().indexOf(q) >= 0) hit.push(n.id);
+      if (m.test(hay)) hit.push(n.id);
     });
     setSel(hit);
   };
@@ -2398,7 +2459,7 @@ def render_html(g, title="deck connectivity", header=(), layout=None):
   <button id="in" title="zoom in (+)">+</button>
   <button id="fit" title="fit to window (0)">fit</button>
   <button id="one" title="actual size">1:1</button>
-  <input id="find" type="search" placeholder="find net or instance  (/)">
+  <input id="find" type="search" placeholder="find net or instance, or /regex/">
   <button id="edit" title="arrange the columns by hand">edit layout</button>
   <span id="editbar">
     <button id="addcol">+ column</button>
@@ -2423,6 +2484,7 @@ def render_html(g, title="deck connectivity", header=(), layout=None):
   <span id="dirty"></span>
   <span id="selinfo"></span>
   <span id="hideinfo"></span>
+  <span id="findinfo"></span>
 </div>
 <div id="stage">
 %(svg)s
@@ -2437,7 +2499,8 @@ def render_html(g, title="deck connectivity", header=(), layout=None):
 <div id="inspect"><div id="inspecthead"></div><div id="inspectbody"></div></div>
 <div id="report"><div id="reporthead"></div><div id="reportbody"></div></div>
 <div id="hint">wheel: zoom &middot; drag: pan &middot; click: trace a net
-&middot; editing: shift+drag to box-select, double-click for siblings</div>
+&middot; find: plain text or /regex/ &middot; editing: shift+drag to box-select,
+double-click for siblings</div>
 </div>
 <script>window.DECK = %(state)s;</script>
 <script>%(js)s</script>

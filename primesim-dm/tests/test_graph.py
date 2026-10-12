@@ -533,6 +533,27 @@ class HtmlTest(unittest.TestCase):
         self.assertIn("#dropzones, #dropline, #band { pointer-events: none; }",
                       html)
 
+    def test_find_takes_a_regex_only_when_asked(self):
+        html = graph_mod.render_html(self.graph())
+        # plain text has to stay a plain substring: a net label really is
+        # spelled dq[0:7], and as a pattern that means something else
+        self.assertIn("/^\\/(.*)\\/([a-z]*)$/", html)
+        self.assertIn("indexOf(lower) >= 0", html)
+        self.assertIn("/regex/", html)
+
+    def test_a_regex_is_matched_field_by_field(self):
+        # the haystack is the name and the subckt and every net behind a
+        # bus run together; ^...$ against that can never match
+        html = graph_mod.render_html(self.graph())
+        self.assertIn("hay.split(/\\s+/)", html)
+
+    def test_a_pattern_that_will_not_compile_is_shown(self):
+        html = graph_mod.render_html(self.graph())
+        self.assertIn("bad regex: ", html)
+        self.assertIn('id="findinfo"', html)
+        # matching nothing looks the same as finding nothing, so it says so
+        self.assertIn("find.classList.toggle('bad'", html)
+
     def test_the_viewer_can_read_a_layout_back_in(self):
         html = graph_mod.render_html(self.graph())
         self.assertIn('id="load"', html)
