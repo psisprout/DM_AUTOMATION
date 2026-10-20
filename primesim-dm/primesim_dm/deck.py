@@ -477,14 +477,18 @@ def read(paths, follow_includes=True, search_dirs=(), fold_case=True,
         if at_limit and path not in deck.depth_limited:
             deck.depth_limited.append(path)
 
-        depth = 0
+        # how deep inside .subckt bodies this line sits.  A separate name
+        # from the include depth on purpose: one counter serving both read
+        # every include as if it sat one level down, which quietly turned
+        # --max-depth into a no-op for anything but 1.
+        nesting = 0
         base_dir = os.path.dirname(path)
         for lineno, line in spice.logical_lines(text):
             if _DOT_SUBCKT.match(line):
-                depth += 1
+                nesting += 1
                 continue
             if _DOT_ENDS.match(line):
-                depth = max(0, depth - 1)
+                nesting = max(0, nesting - 1)
                 continue
 
             if _DOT_INCLUDE.match(line) or _DOT_LIB.match(line):
@@ -504,7 +508,7 @@ def read(paths, follow_includes=True, search_dirs=(), fold_case=True,
                         queue.append((target, sub_section, depth + 1))
                 continue
 
-            if depth:                      # only the top level is checked
+            if nesting:                    # only the top level is checked
                 continue
 
             m = _DOT_GLOBAL.match(line)

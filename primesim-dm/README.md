@@ -1,14 +1,21 @@
-# primesim-dm-setup
+# primesim-dm-check
 
-PrimeSim 시뮬레이션 덱을 자동으로 셋업해주는 CLI.
+이미 있는 PrimeSim 덱을 **읽고 검증하는** CLI. 명령은 세 개뿐입니다.
 
-모델 파일에서 `.subckt` 포트를 읽어와 → **네이밍 룰로 자동 결선** → **안 쓰는 노드 자동 터미네이션**
-→ 덱(`.sp`) + 결선 리포트를 생성합니다. HBM / LPDDR / NAND처럼 포트가 수십~수백 개인 IO 모델을
-손으로 연결하다 순서 하나 틀려서 며칠 날리는 걸 막는 게 목적입니다.
+| 명령 | 하는 일 | 출력 |
+|---|---|---|
+| `lint` | 연결성·구조 검사 | `-o report.txt` |
+| `graph` | 같은 연결성을 그림으로 | `-o graph.html` |
+| `terminate` | 뜬 노드에 터미네이션 생성 | `-o term.inc` |
 
-- **의존성 없음.** Python 3 표준 라이브러리만 사용 (3.6+). pip 설치 불필요.
+덱을 **만드는** 기능(`scan` / `init` / `gen`, config, 네이밍 룰)은 이 브랜치에 없습니다.
+덱 확인만 할 거면 이쪽이 가볍습니다. 생성 기능은 `claude/dm-element-profile` 쪽에 있습니다.
+
+- **의존성 없음.** Python 3 표준 라이브러리만 (3.6+). pip 설치 불필요.
 - **파일 복사만으로 반입 가능.** `primesim-dm/` 디렉토리 통째로 복사하면 끝.
-- 결과 파싱/리포트(`.mt0` 등)는 아직 범위 밖. 지금은 덱 생성 + 결선 검증까지.
+- 읽는 소자는 DM 링크 덱에 실제로 쓰는 것으로 한정됩니다 → [`--profile`](#--profile--읽는-소자-종류를-dm-덱에-맞게-좁힘)
+- 상한은 **기본으로 전부 없습니다.** `--max-depth`(include 깊이)와 `--max-elements`
+  (그림에 그릴 소자 수)는 주지 않으면 무제한입니다.
 
 ---
 
@@ -18,12 +25,19 @@ PrimeSim 시뮬레이션 덱을 자동으로 셋업해주는 CLI.
 
 ```bash
 cd primesim-dm
-python3 -m unittest discover -s tests     # 137개 테스트, 전부 통과해야 정상
-python3 -m primesim_dm gen examples/hbm_tx_rx.jsonc
+python3 -m unittest discover -s tests     # 218개 테스트, 전부 통과해야 정상
+python3 -m primesim_dm lint --help
 ```
 
-`examples/out/hbm_tx_rx.sp` 와 `.report.txt` 가 나오면 준비 완료입니다.
-`examples/models/*.inc` 는 동작 확인용 가짜 모델이므로 실제 모델로 교체해서 쓰면 됩니다.
+실제 덱으로 바로 확인:
+
+```bash
+# 어느 디렉토리에서든 (런처 사용)
+/path/to/primesim-dm/primesim-dm lint /proj/sim/lpddr_write.sp
+
+# 패키지 폴더 안에서라면
+python3 -m primesim_dm lint /proj/sim/lpddr_write.sp
+```
 
 ### 윈도우에서
 
@@ -52,50 +66,13 @@ C:\tools\primesim-dm\primesim-dm.bat lint C:\proj\sim\lpddr_write.sp
 ```
 
 - 읽기는 항상 UTF-8로 하고 깨지는 바이트는 대체 문자로 넘깁니다. 한국어 윈도우 기본
-  인코딩(cp949)으로 저장된 모델·config가 있어도 죽지 않고, 리눅스와 같은 결과가 나옵니다.
-- 쓰기는 항상 LF입니다. 윈도우에서 만든 덱을 리눅스 팜에서 그대로 돌릴 수 있습니다.
+  인코딩(cp949)으로 저장된 덱·모델이 있어도 죽지 않고, 리눅스와 같은 결과가 나옵니다.
+- 쓰기는 항상 LF입니다. 윈도우에서 만든 `term.inc` 를 리눅스 팜에서 그대로 돌릴 수 있습니다.
 - CRLF로 저장된 덱을 읽는 것도 됩니다.
 
-다만 **덱에 박히는 모델 경로는 만든 쪽 OS 기준**입니다. 윈도우에서 만들어 리눅스에서
-돌릴 거라면 `deck.output` 과 모델 경로를 상대경로로 쓰거나, 실행할 환경에서 생성하세요.
+## 2. `lint` — 기존 덱 검사 (설정 없이)
 
-## 2. 기본 흐름
-
-```bash
-# (1) 모델에 뭐가 들어있는지 본다 - 포트 이름과 순서 확인
-python3 -m primesim_dm scan /proj/models/hbm/io.inc
-
-# (2) config 뼈대를 만든다 (인스턴스 stub 자동 생성)
-python3 -m primesim_dm init /proj/models/hbm/io.inc \
-        --subckt hbm_tx_drv --subckt hbm_rx_amp \
-        -o my_deck.jsonc --deck out/my_deck.sp
-
-# (3) my_deck.jsonc 에 네이밍 룰 / 안 쓰는 핀을 적는다  ← 여기가 사람이 하는 일
-
-# (4) 덱 생성
-python3 -m primesim_dm gen my_deck.jsonc
-
-# (5) 룰만 고쳐가며 결선 확인 (덱은 안 쓰고 리포트만 출력)
-python3 -m primesim_dm check my_deck.jsonc
-```
-
-명령어 4개가 전부입니다.
-
-| 명령 | 하는 일 |
-|---|---|
-| `scan`  | `.subckt` 정의와 포트 목록/순서/파라미터 출력 (`--json` 지원) |
-| `init`  | 모델 파일에서 config 뼈대 생성 |
-| `gen`   | config → 덱 `.sp` + `.sp.report.txt` |
-| `check` | 덱은 안 쓰고 결선 리포트만 출력 (룰 튜닝용) |
-| `lint`  | **이미 있는 덱(.sp)을 읽어서 구조·연결성 검사.** config 불필요 |
-| `terminate` | **뜬 노드를 뽑아서 R/C 터미네이션 `.inc` 생성.** config 불필요 |
-| `graph` | **읽은 연결성을 그림(SVG/HTML)으로 출력.** config 불필요 |
-
-`gen`/`check` 에 `--strict` 를 주면 경고가 하나라도 있을 때 exit code 1 → 회귀 스크립트에 물리기 좋습니다.
-
-## 2-1. `lint` — 기존 덱 검사 (설정 없이)
-
-`gen`/`check` 는 이 도구가 만든 config가 있어야 하지만, `lint` 는 **덱 파일만 있으면 됩니다.**
+설정 파일 같은 게 필요 없습니다. **덱 파일만 있으면 됩니다** —
 손으로 만든 덱, 남이 준 덱, 예전 프로젝트 덱에 그대로 돌아갑니다.
 
 ```bash
@@ -356,7 +333,7 @@ WARN  checks-skipped   connectivity checks skipped: the netlist is incomplete,
 include를 먼저 해결하고 다시 돌리는 게 맞습니다. 굳이 보고 싶으면 `--force-connectivity`.
 
 ```
-primesim-dm-setup deck check
+primesim-dm deck check
 ==================================================================
 files    : 1
 elements : 13 at the top level
@@ -415,7 +392,7 @@ WARN  floating-net  net bump_vssi_3 is touched only by X_RDL and nothing else, a
 포트 번호를 같이 찍는 건, 파일만 보면 연결된 것처럼 보이는 게 바로 이 경우라서입니다.
 `graph` 도 같은 기준이라 빨갛게 나오고, `terminate` 도 후보로 올립니다.
 
-## 2-2. `terminate` — 뜬 노드에 터미네이션 달기
+## 3. `terminate` — 뜬 노드에 터미네이션 달기
 
 한쪽만 연결된 노드를 찾아 R/C 터미네이션 줄을 만들어 줍니다. `lint` 와 같은
 옵션(`--search-dir` / `--skip` / `--opaque` / `--max-depth` / `--keep-net`)을 그대로 씁니다.
@@ -489,7 +466,7 @@ Rterm_4  ball_dq0  0  1T   $ XPKG_DQ0 port 1 (deck.sp:4)
 **읽지 못한 include가 있으면 거부합니다.** 그 파일 안의 소자가 빠져서 뜬 것처럼 보이는
 net까지 터미네이션하면 진짜 문제를 덮어버리기 때문입니다. `--force` 로 넘길 수는 있습니다.
 
-## 2-3. `graph` — 연결성을 그림으로
+## 4. `graph` — 연결성을 그림으로
 
 `lint` 가 읽은 것과 똑같은 소자·net을 그대로 그립니다. 리포트 400줄을 읽는 대신
 모양으로 보려는 것이고, 설정 파일은 필요 없습니다.
@@ -856,286 +833,57 @@ primesim-dm graph top.sp --format dot -o top.dot
 dot -Tpdf top.dot -o top.pdf        # graphviz 가 있는 환경에서
 ```
 
-## 3. 결선 규칙 — 우선순위
+## 5. 상한은 기본으로 없습니다
 
-포트 하나가 어떤 net에 붙을지는 **위에서부터 먼저 걸리는 것**이 이깁니다.
+| 옵션 | 기본값 | 주면 |
+|---|---|---|
+| `--max-depth N` | **무제한** | `.include` / `.lib` 를 N단계까지만 따라감 |
+| `--max-elements N` | **무제한** | `graph` 가 연결 많은 순으로 N개만 그림 (V/I 소스 우선 보호) |
 
-1. `instances[].connect` — 포트명 → net명 직접 지정
-2. `instances[].unused` — 정규식에 걸리면 터미네이션
-3. `instances[].rules` — 인스턴스 전용 룰 (위에서부터 첫 매치)
-4. `naming.rules` — 전역 룰 (위에서부터 첫 매치)
-5. `naming.default` — 아무것도 안 걸렸을 때의 기본 정책
-
-기본 정책(`naming.default`):
-
-| 값 | 동작 |
-|---|---|
-| `same_name` | net 이름 = 포트 이름 (기본값) |
-| `prefix` | net 이름 = `<인스턴스명>_<포트명>` |
-| `terminate` | 매칭 안 된 포트는 전부 터미네이션 |
-| `error` | 매칭 안 된 포트가 있으면 에러로 중단 (룰을 빠짐없이 쓰게 강제) |
-
-### 룰 문법
-
-```jsonc
-{ "match": "^DQ<(\\d+)>$", "net": "ctrl_pad<{1}>" }
-```
-
-- `match` 는 파이썬 정규식. JSON 안이라 백슬래시는 `\\d` 처럼 두 번 씁니다.
-- `net` 템플릿에서 쓸 수 있는 필드:
-  - `{1}`, `{2}` … 정규식 캡처 그룹 / `{0}` 전체 매치
-  - `{port}` 포트명, `{inst}` 인스턴스명, `{subckt}` 서브서킷명, `{index}` 포트 순번
-- 변환 붙이기: `{1|lower}`, `{1|upper}`, `{1|int}`(0 제거), `{1|zfill:3}`
-  → 예: `{ "match": "^V(DD|SS)Q$", "net": "v{1|lower}q" }` → `VDDQ` → `vddq`
-- `"action": "terminate"` 를 주면 연결 대신 터미네이션, `"skip"` 은 이 룰을 건너뛰고 다음 룰로.
-- net 이름 앞에 `!` 를 붙이면 (`"!VDD_ANALOG"`) 아래 정규화를 건너뛰고 그대로 씁니다.
-
-### 버스 표기 정규화 — `<>` / `[]` / `()` 섞임 문제
-
-모델마다 `DQ[0]`, `DQ<0>`, `DQ(0)` 이 제각각이라 룰이 안 먹는 게 제일 흔한 사고입니다.
-
-- `naming.bus_style` 을 `angle` 로 두면 **생성되는 net 이름**이 전부 `DQ<0>` 로 통일되고,
-- `naming.match_normalized`(기본 `true`) 덕분에 **룰 매칭도 정규화된 이름**으로 이뤄집니다.
-  즉 모델이 `DQ[0]` 이라고 써놨어도 룰은 `^DQ<(\d+)>$` 하나로 충분합니다.
-- 모델의 `.subckt` 선언이 `DQ[7:0]` 처럼 묶여 있으면 `models.expand_buses: true` 로 펼칩니다.
-
-`naming.case` 는 `keep`/`upper`/`lower` — 생성 net 이름의 대소문자를 강제합니다.
-(포트 매칭 시 대소문자는 건드리지 않습니다. 룰은 모델에 적힌 철자대로 쓰세요.)
-
-## 4. 터미네이션
-
-안 쓰는 핀을 지정하는 방법은 세 가지입니다.
-
-```jsonc
-"instances": [{
-  "unused": ["^ODT_EN<", "^DRV_STR<"]          // (1) 인스턴스 단위
-}],
-"naming": { "rules": [
-  { "match": "^TM_", "action": "terminate", "type": "tie", "to": "vss" }   // (2) 룰로
-]},
-"termination": { "auto_terminate_floating": true }   // (3) 뜬 노드 자동 처리
-```
-
-(3)은 **연결된 게 하나뿐인 net**(= 한쪽 끝이 뜬 노드)을 찾아 자동으로 부하를 답니다.
-실수로 빠뜨린 출력 핀을 잡아주는 안전망입니다. 이때 `tie` 는 실신호를 레일에 쇼트시키므로
-자동 처리 시에는 `rload` 로 낮춰서 적용합니다.
-
-여기서 중요한 건 **안전망이 진짜 실수를 덮지 않는 것**입니다. 자동 터미네이션이 걸렸는데
-`termination.overrides` 나 인스턴스 `termination` 으로 "이 핀은 부하가 없는 게 정상"이라고
-미리 밝혀두지 않은 포트는 **경고로 올라옵니다**. 룰의 net 이름을 잘못 써서 두 블록이 안 이어진
-경우가 정확히 여기 걸립니다 (`--strict` 면 exit 1).
+둘 다 "모르는 트리를 일단 막아보는" 용도입니다. 기본으로 걸어두면 **검사 범위가 조용히
+줄어드는** 쪽이 더 위험해서 끄는 게 기본입니다. 실제로 잘렸을 때는 헤더에 찍힙니다:
 
 ```
-! XTX.PAD<0> -> txpad<0> was floating and got a rload; no rule or override
-  expected that - is the net name right?
-! XCH.IN<0>  -> txp<0>   was floating and got a rload; ...
+depth cap: 3 file(s) hit --max-depth; their includes were not followed
 ```
 
-양쪽 다 뜬 걸로 잡히므로 `txpad<n>` 과 `txp<n>` 이 어긋났다는 게 바로 보입니다.
-
-터미네이션 타입:
-
-| `type` | 생성되는 것 |
-|---|---|
-| `tie` | 포트를 `to` net(예: `vss`)에 직접 연결. 소자 없음 |
-| `rload` | `Rterm_N <net> <to> <value>` (기본 `1T`) |
-| `cload` | `Cterm_N <net> <to> <value>` — 부하 없는 디지털 출력용 |
-| `rc` | R(`value`) + C(`value2`) 둘 다 |
-| `vsource` | `Vterm_N <net> <to> DC <value>` — 코드/모드 핀을 특정 전압으로 |
-| `isource` | `Iterm_N <net> <to> DC <value>` |
-| `open` | 아무것도 안 붙이고 고유 net 이름만 부여 (의도적 open, 경고 안 뜸) |
-
-우선순위: 룰에 적힌 값 > `instances[].termination` > `termination.overrides`(포트명 정규식) > `termination.default`.
-
-`termination.keep_nets` 에 정규식을 넣으면 그 net은 뜬 노드 검사에서 제외됩니다
-(외부에서 자극을 주는 net 등).
-
-## 4-1. 폴더에 DB 버전이 섞여 있을 때
-
-스테이지 폴더에 `pkg_v1p0.inc`, `pkg_v2p3_20260801.inc` 처럼 여러 버전이 같이 있으면
-같은 `.subckt` 이름이 여러 번 정의됩니다. **이때 어느 걸 쓸지는 이 도구가 정하지 않습니다.**
-그건 엔지니어링 판단이지 파일 이름으로 추측할 일이 아닙니다.
-
 ```
-error: instance XPKG: subckt 'pkg_sp' is defined in 2 files, so which one to use
-is a decision this tool will not make for you. Set 'source' on the instance to one of:
-  /proj/models/2_soc_pkg/pkg_v1p0.inc
-  /proj/models/2_soc_pkg/pkg_v2p3_20260801.inc
+400 least-connected element(s) not drawn - listed under 'past --max-elements'
 ```
 
-`source` 로 지정합니다. 경로의 일부만 써도 되지만 **후보를 하나로 좁히지 못하면 그것도 에러**입니다:
+범위를 줄이고 싶으면 `--max-depth` 보다 **`--opaque` / `--skip` 을 먼저** 쓰세요.
+어느 파일을 왜 안 봤는지가 남습니다.
 
-```jsonc
-{ "name": "XPKG", "subckt": "pkg_sp", "source": "pkg_v2p3_20260801.inc" }
-```
+## 6. 한계 / 주의
 
-- 실제로 인스턴스가 부르는 이름만 따집니다. 안 쓰는 중복은 아무 말 안 합니다.
-- 옛날 방식(경고 후 첫 번째 사용)이 필요하면 `models.on_duplicate: "warn"`.
+- SPICE 문법 전체를 파싱하지 않습니다. `.subckt` / `.ends` / `.include` / `.lib` /
+  `.global` / `.connect` / `.model ... S` 와 주석·연속행만 해석합니다.
+- `.if` / `.elseif` / `.endif` 는 분기 판단을 안 하고 **전부 읽습니다.**
+- `.subckt` **내부는 읽지 않습니다.** 연결성은 최상위만 봅니다. 내부에서 실제로 어떻게
+  쓰이는지는 모릅니다.
+- 시뮬레이터를 실행하지 않습니다. 덱을 읽는 데까지가 범위입니다.
+- 못 읽은 줄은 `unparsed`, 프로필 밖 소자는 `off-profile` 로 **개수와 줄번호가 항상
+  찍힙니다.** 검사 범위를 모르면 "문제 없음"에 의미가 없어서입니다.
 
-그리고 **생성된 덱 헤더에 실제로 쓴 모델 파일이 크기·수정시각과 함께 박힙니다.**
-몇 달 뒤 "이 아이 다이어그램 어느 패키지 DB로 뽑은 거지?"에 답할 수 있어야 해서입니다.
-
-```
-*----------------------------------------------------------------------------
-* models this deck was built from
-*----------------------------------------------------------------------------
-* /proj/models/2_soc_pkg/pkg_v2p3_20260801.inc  (184320 bytes, modified 2026-08-01 09:12)
-```
-
-버전이 섞인 폴더라면 글롭보다 **파일을 명시하는 쪽**을 권합니다. 어차피 스테이지당 한 줄이고,
-config를 보면 이번 시뮬이 어떤 DB 조합인지 한눈에 보입니다.
-
-## 5. 여러 제품 덱 공유 — `extends`
-
-사내 공통 룰(테스트핀 처리, 전원 이름 규칙 등)은 베이스 config 하나에 몰아두고,
-제품별 덱은 그걸 상속합니다.
-
-```jsonc
-{ "extends": "base_common.jsonc",
-  "deck": { "title": "LPDDR DQ lane", "output": "out/lpddr.sp" },
-  "instances": [ ... ] }
-```
-
-- 오브젝트는 **깊은 병합**, 리스트는 **통째로 교체**입니다.
-  (자식이 `naming.rules` 를 쓰면 부모 룰 목록은 사라집니다. 덧붙이는 게 아닙니다.)
-- 부모에 적힌 모델 경로는 **부모 파일 기준**으로 해석됩니다.
-- `"extends": ["a.jsonc", "b.jsonc"]` 처럼 여러 개도 가능 (뒤가 우선).
-
-`examples/base_common.jsonc` + `examples/lpddr_dq.jsonc` 가 이 형태의 예시입니다.
-
-## 6. config 전체 레퍼런스
-
-```jsonc
-{
-  "extends": "base.jsonc",              // 선택
-
-  "deck": {
-    "title":   "덱 제목",
-    "output":  "out/deck.sp",           // config 파일 기준 상대경로
-    "temp":    [25, 125],               // .temp
-    "options": ["post", "accurate"],    // 각각 .option 한 줄
-    "globals": ["vdd", "vss"],          // .global (뜬 노드 검사에서도 제외됨)
-    "width":   88                       // 줄바꿈 폭 ('+' 연속행)
-  },
-
-  "models": {
-    // 파일 / 디렉토리 / 글롭 다 됨. 매치 결과는 정렬되므로
-    // models/0_soc_io, 1_soc_rdl ... 처럼 번호를 붙여두면 stage 순서대로 나옴
-    "files": ["models/**/*.inc", "models/3_board", {"path": "b.lib", "section": "tt"}],
-    "extensions": [".inc", ".sp", ".spi", ".lib", ".cir", ".mod", ".net"],
-    "on_duplicate": "error",            // 같은 subckt이 여러 파일에 있을 때
-    "search_dirs": ["/proj/models"],    // include 따라갈 때 탐색 경로
-    "follow_includes": false,           // .include/.lib 를 재귀적으로 따라감
-    "expand_buses": false,              // .subckt 의 DQ[7:0] 을 비트로 펼침
-    "emit_includes": true               // 덱에 .include/.lib 줄을 쓸지
-  },
-
-  "naming": {
-    "case": "keep",                     // keep | upper | lower
-    "bus_style": "keep",                // keep | angle | bracket | paren | underscore
-    "default": "same_name",             // same_name | prefix | terminate | error
-    "match_normalized": true,
-    "prefix_sep": "_",
-    "rules": [ { "match": "^TM_", "action": "terminate", "type": "tie", "to": "vss" } ]
-  },
-
-  "supplies": [
-    { "net": "vdd", "value": 1.1 },     // Vvdd vdd 0 DC 1.1
-    { "net": "vddq", "value": "PWL 0 0 1n 1.1", "ref": "0", "name": "Vq" }
-  ],
-
-  "termination": {
-    "auto_terminate_floating": true,
-    "keep_nets": ["^probe_"],
-    "net_prefix": "n_",
-    "default":   { "type": "rload", "to": "vss", "value": "1T" },
-    "overrides": [ { "match": "^DOUT", "type": "cload", "to": "vss", "value": "5f" } ]
-  },
-
-  "instances": [
-    {
-      "name": "XTX",                    // 덱에 나갈 인스턴스 이름
-      "subckt": "hbm_tx_drv",
-      "source": "io.inc",               // 같은 이름 subckt이 여러 파일에 있을 때 지정
-      "comment": "출력 드라이버",
-      "params": { "seg": 4 },
-      "default": "prefix",              // 이 인스턴스만 다른 기본 정책
-      "connect": { "EN_TX": "en_tx" },
-      "rules":   [ { "match": "^DIN<(\\d+)>$", "net": "txd<{1}>" } ],
-      "unused":  ["^SCAN_"],
-      "termination": { "type": "tie", "to": "vss" }   // 이 인스턴스 터미네이션 기본값
-    }
-  ],
-
-  "stimulus": ["Vclk clk 0 PULSE 0 1.1 0 20p 20p 230p 500p"],   // 그대로 출력
-  "analysis": {
-    "op": true,
-    "tran": { "step": "1p", "stop": "20n", "start": "0", "extra": "" },
-    "dc":   { "source": "vin", "start": 0, "stop": 1.1, "step": 0.01 },
-    "ac":   { "mode": "dec", "points": 100, "start": "1k", "stop": "10G" },
-    "raw":  [".tran 1p 20n sweep temp 25 125 50"]   // 위 형식으로 안 되는 건 여기에
-  },
-  "probes":  ["v(dq<0>) v(dqs_t)"],
-  "measures": [".meas tran pp1 pp v(dq<0>) from=2n to=20n"],
-  "raw_prepend": [],                    // 헤더 직후에 그대로 삽입
-  "raw_append":  []                     // .end 직전에 그대로 삽입
-}
-```
-
-`stimulus` / `raw_*` 에 적은 줄은 그대로 덱에 나가고, 그 안에 등장하는 net 이름은
-"연결된 것"으로 세어지므로 뜬 노드 경고에서 빠집니다.
-
-## 7. 리포트 읽는 법
-
-`gen` 은 덱 옆에 `<덱이름>.sp.report.txt` 를 같이 씁니다. 인스턴스별로 **포트 → net,
-그리고 그 결정을 내린 근거**가 한 줄씩 찍힙니다.
-
-```
-XTX  (subckt hbm_tx_drv, 19 ports)  [hbm_io.inc]
-  DIN<0>     -> txd<0>    inst-rule   instances[XTX].rules[0] ^DIN<(\d+)>$
-  EN_TX      -> en_tx     explicit    connect[EN_TX]
-  TM_DRV<0>  -> vssq      rule        naming.rules[0] (terminate) ^TM_   <TERM tie>
-```
-
-맨 아래 `single-connection nets` 목록이 **한쪽만 붙은 net** 입니다.
-`[open by design]` 표시가 없는데 여기 올라온 net은 대부분 룰이 빠진 것이니 확인하세요.
-
-## 8. 실제 모델에 적용할 때
-
-1. `scan` 으로 포트 이름 규칙을 눈으로 확인 (버스 표기, 테스트핀 접두사 등)
-2. 사내 공통 규칙을 `base_common.jsonc` 로 한 번 정리 — 이게 자산입니다
-3. 참고용으로 쓰던 기존 덱과 생성 덱을 나란히 diff 해서 결선이 같은지 확인
-4. 맞으면 `--strict` 로 회귀 스크립트에 물리기
-
-## 9. 한계 / 주의
-
-- `.subckt` 포트 **순서**대로 결선하므로, 모델이 바뀌면 덱을 다시 생성해야 합니다.
-  (생성 덱을 손으로 고치지 마세요. 헤더에도 그렇게 적힙니다.)
-- SPICE 문법 전체를 파싱하지 않습니다. `.subckt`/`.ends`/`.include`/`.lib` 와
-  주석·연속행만 해석합니다. 전처리기 매크로(`.if` 등)가 섞인 모델은 `scan` 결과를 먼저 확인하세요.
-- 뜬 노드 검사는 이 덱 안에서만 셉니다. 서브서킷 내부에서 실제로 어떻게 쓰이는지는 모릅니다.
-- 시뮬레이터를 실행하지 않습니다. 덱 생성까지가 범위입니다.
-
-## 10. 구조
+## 7. 구조
 
 ```
 primesim_dm/
-  spice.py    .subckt 파싱, 주석/연속행 처리, 버스 표기, 줄바꿈
-  config.py   JSONC 로딩, extends 병합, 스키마 검증
-  netlist.py  포트→net 해석, 터미네이션, 뜬 노드 검사   ← 자동화의 핵심
-  emit.py     덱/리포트 렌더링
-  cli.py      scan / init / gen / check
-examples/     동작 확인용 가짜 모델 + config 예시
-tests/        unittest (표준 라이브러리)
+  spice.py       .subckt 파싱, 주석/연속행, .lib 섹션 선택
+  deck.py        덱 → 소자/노드 (프로필, include 추적, opaque/skip)
+  check.py       구조 검사와 리포트, 터미네이션 생성
+  graph.py       연결성 그림 + HTML 뷰어 (라이브러리 없음, file:// 로 열림)
+  references.py  기준 패턴/옵션 파일 경로 ← 여기만 고치면 됩니다
+  cli.py         lint / terminate / graph
+tests/           unittest (표준 라이브러리), 218개
 ```
 
 라이브러리로도 쓸 수 있습니다:
 
 ```python
-from primesim_dm import config, netlist, emit, spice
+from primesim_dm import check, deck, graph
 
-cfg = config.load("my_deck.jsonc")
-subs, _files = spice.scan_files([f["path"] for f in cfg["models"]["files"]])
-nl = netlist.Resolver(cfg, netlist.build_index(subs)).build()
-print(emit.render_deck(cfg, nl))
+dk = deck.read(["top.sp"], skip=["/pdk/"])        # profile="dm" 이 기본
+findings = check.Checker(dk, si=True).run()
+html = graph.render_html(graph.build(dk))
 ```

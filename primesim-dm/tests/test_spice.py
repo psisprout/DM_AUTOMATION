@@ -19,14 +19,6 @@ class TestLines(unittest.TestCase):
         self.assertEqual(got[0], (1, ".subckt foo a b  c d"))
         self.assertEqual(got[1][1], "R1 a b 1k")
 
-    def test_wrap(self):
-        toks = ["X1"] + ["net%02d" % i for i in range(20)] + ["sub"]
-        lines = spice.wrap(toks, width=40)
-        self.assertTrue(len(lines) > 1)
-        self.assertTrue(all(l.startswith("+ ") for l in lines[1:]))
-        rebuilt = " ".join(lines[:1] + [l[2:] for l in lines[1:]]).split()
-        self.assertEqual(rebuilt, toks)
-
 
 class TestIncludePath(unittest.TestCase):
     """A relative path starts with a dot, so 'starts with .' cannot be the
@@ -150,24 +142,6 @@ s1 1 2 3 4 mname=smodel
         one, two = spice.parse_subckts(src)
         self.assertEqual(one.labels(), ["P_A"])
         self.assertEqual(two.labels(), ["Q_A"])
-
-    def test_bus_expand(self):
-        self.assertEqual(spice.expand_bus("DQ[3:0]"),
-                         ["DQ[3]", "DQ[2]", "DQ[1]", "DQ[0]"])
-        self.assertEqual(spice.expand_bus("A<0:2>"), ["A<0>", "A<1>", "A<2>"])
-        self.assertEqual(spice.expand_bus("CLK"), ["CLK"])
-
-    def test_bus_expand_in_subckt(self):
-        subs = spice.parse_subckts(".subckt f DQ[1:0] VSS\n.ends\n",
-                                   expand_buses=True)
-        self.assertEqual(subs[0].ports, ["DQ[1]", "DQ[0]", "VSS"])
-
-    def test_normalize_bus(self):
-        self.assertEqual(spice.normalize_bus("DQ[3]", "angle"), "DQ<3>")
-        self.assertEqual(spice.normalize_bus("DQ<3>", "bracket"), "DQ[3]")
-        self.assertEqual(spice.normalize_bus("DQ(03)", "underscore"), "DQ_3")
-        self.assertEqual(spice.normalize_bus("CLK", "angle"), "CLK")
-        self.assertEqual(spice.normalize_bus("DQ[3]", "keep"), "DQ[3]")
 
     def test_nested_depth(self):
         src = ".subckt outer a\n.subckt inner b\n.ends\n.ends\n"

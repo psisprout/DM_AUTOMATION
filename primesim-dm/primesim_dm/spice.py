@@ -7,7 +7,7 @@ Handles the parts of the deck syntax that matter for port discovery:
   * full-line comments (``*``) and inline ``$`` comments
   * ``+`` line continuation
   * ``.subckt`` / ``.ends`` (incl. nesting, ``param:``, parenthesised ports)
-  * ``.include`` / ``.lib`` so a top model file can pull in the rest
+  * ``.lib`` sections, so only the corner a deck selected is live
 """
 
 import os
@@ -27,19 +27,6 @@ _NODE_ANNOT = [
     re.compile(r"^\s*\*\s*node\s*(\d+)[\s:=]+(\S+)", re.I),
     re.compile(r"^\s*\*\s*port\s*(\d+)[\s:=]+(\S+)", re.I),
 ]
-
-# ``DQ[7:0]`` / ``DQ<7:0>`` / ``DQ(7:0)`` style bus declarations in a port list
-_BUS = re.compile(r"^(?P<base>.+?)[\[<\(](?P<hi>\d+)\s*:\s*(?P<lo>\d+)[\]>\)]$")
-
-BUS_STYLES = {
-    "angle": "{base}<{idx}>",
-    "bracket": "{base}[{idx}]",
-    "paren": "{base}({idx})",
-    "underscore": "{base}_{idx}",
-}
-
-_BUS_ANY = re.compile(r"^(?P<base>.+?)[\[<\(](?P<idx>\d+)[\]>\)]$")
-
 
 class SpiceError(Exception):
     pass
@@ -95,20 +82,6 @@ class Subckt(object):
                            % (self.name, nm, seen[nm], idx))
             seen[nm] = idx
         return out
-
-    def to_dict(self):
-        return {
-            "name": self.name,
-            "ports": list(self.ports),
-            "labels": self.labels(),
-            "node_names": dict((str(k), v)
-                               for k, v in sorted(self.node_names.items())),
-            "params": dict(self.params),
-            "path": self.path,
-            "line": self.line,
-            "depth": self.depth,
-        }
-
 
 def _ranges(nums):
     """[1,2,3,7] -> '1-3, 7'"""
@@ -191,37 +164,6 @@ def _tokenize(text):
     return out
 
 
-def expand_bus(port):
-    """``DQ[7:0]`` -> ``['DQ[7]', ... 'DQ[0]']``; plain names pass through."""
-    m = _BUS.match(port)
-    if not m:
-        return [port]
-    base = m.group("base")
-    hi = int(m.group("hi"))
-    lo = int(m.group("lo"))
-    open_c = port[len(base)]
-    close_c = port[-1]
-    step = -1 if hi >= lo else 1
-    return ["%s%s%d%s" % (base, open_c, i, close_c)
-            for i in range(hi, lo + step, step)]
-
-
-def normalize_bus(name, style):
-    """Rewrite the bus delimiter of a single net/port name.
-
-    ``style`` is one of ``angle``/``bracket``/``paren``/``underscore``/``keep``.
-    """
-    if not style or style == "keep":
-        return name
-    fmt = BUS_STYLES.get(style)
-    if fmt is None:
-        raise SpiceError("unknown bus_style: %s" % style)
-    m = _BUS_ANY.match(name)
-    if not m:
-        return name
-    return fmt.format(base=m.group("base"), idx=int(m.group("idx")))
-
-
 def parse_node_annotations(text):
     """Collect ``*node <n> <name>`` header comments.
 
@@ -271,7 +213,7 @@ def _attach_annotations(found, annots):
             owner.node_names[idx] = name
 
 
-def parse_subckts(text, path="<string>", expand_buses=False):
+def parse_subckts(text, path="<string>"):
     """Return every ``.subckt`` found in ``text``."""
     found = []
     stack = []
@@ -296,10 +238,7 @@ def parse_subckts(text, path="<string>", expand_buses=False):
                     continue
                 if in_params:
                     continue
-                if expand_buses:
-                    ports.extend(expand_bus(tok))
-                else:
-                    ports.append(tok)
+                ports.append(tok)
             sub = Subckt(name, ports, params, path, lineno, len(stack))
             found.append(sub)
             stack.append(sub)
@@ -391,80 +330,3 @@ def include_path(line):
     """
     target = include_target(line)
     return target[0] if target else None
-
-
-def _resolve_path(raw, base_dir, search_dirs):
-    raw = os.path.expandvars(os.path.expanduser(raw))
-    cands = [raw] if os.path.isabs(raw) else []
-    if not os.path.isabs(raw):
-        cands.append(os.path.join(base_dir, raw))
-        for d in search_dirs:
-            cands.append(os.path.join(d, raw))
-    for c in cands:
-        if os.path.isfile(c):
-            return c
-    return None
-
-
-def scan_files(paths, follow_includes=False, search_dirs=(),
-               expand_buses=False, warn=None):
-    """Parse every file in ``paths`` (optionally following .include/.lib).
-
-    Returns ``(subckts, files_read)``.  ``warn`` is an optional callable that
-    receives a message string for each problem (missing include, etc).
-    """
-    warn = warn or (lambda msg: None)
-    seen = []
-    seen_set = set()
-    out = []
-    # entries are either a path or (path, .lib section)
-    queue = [e if isinstance(e, tuple) else (e, None) for e in paths]
-    while queue:
-        p, section = queue.pop(0)
-        p = os.path.abspath(os.path.expandvars(os.path.expanduser(p)))
-        if (p, section) in seen_set:
-            continue
-        if not os.path.isfile(p):
-            warn("model file not found: %s" % p)
-            continue
-        seen_set.add((p, section))
-        seen.append(p)
-        try:
-            with open(p, "r", encoding="utf-8", errors="replace") as fh:
-                text = fh.read()
-        except IOError as exc:
-            warn("cannot read %s: %s" % (p, exc))
-            continue
-        if section or lib_sections(text):
-            text = select_lib_section(text, section)
-        out.extend(parse_subckts(text, p, expand_buses=expand_buses))
-        if not follow_includes:
-            continue
-        base_dir = os.path.dirname(p)
-        for _lineno, line in logical_lines(text):
-            found = include_target(line)
-            if not found:
-                continue
-            raw, sub_section = found
-            resolved = _resolve_path(raw, base_dir, search_dirs)
-            if resolved:
-                queue.append((resolved, sub_section))
-            else:
-                warn("could not resolve include %r from %s" % (raw, p))
-    return out, seen
-
-
-def wrap(tokens, width=88, cont="+ ", indent=""):
-    """Render tokens as a deck line, folding with ``+`` continuations."""
-    lines = []
-    cur = indent
-    for tok in tokens:
-        piece = tok if not cur.strip() else " " + tok
-        if cur.strip() and len(cur) + len(piece) > width:
-            lines.append(cur)
-            cur = cont + tok
-        else:
-            cur += piece
-    if cur.strip():
-        lines.append(cur)
-    return lines

@@ -804,10 +804,22 @@ class MaxElementsDefaultTest(unittest.TestCase):
         self.assertEqual(g.dropped, 0)
         self.assertEqual(len(g.boxes), 150)
 
-    def test_the_guard_is_still_there_for_a_flattened_netlist(self):
+    def test_nothing_is_trimmed_by_default(self):
+        # the default is no limit: a picture that silently leaves elements
+        # out is worse than a big one
+        self.assertEqual(graph_mod.DEFAULT_MAX_ELEMENTS, 0)
         body = ["* t"]
-        for i in range(graph_mod.DEFAULT_MAX_ELEMENTS + 50):
+        for i in range(600):
             body.append("XBLK%d n%d m%d sub" % (i, i, i))
         g = graph_mod.build(read_text(self.tmp, "\n".join(body) + "\n"))
-        self.assertEqual(len(g.boxes), graph_mod.DEFAULT_MAX_ELEMENTS)
+        self.assertEqual(g.dropped, 0)
+        self.assertEqual(len(g.boxes), 600)
+
+    def test_the_guard_is_still_there_when_it_is_asked_for(self):
+        body = ["* t"]
+        for i in range(250):
+            body.append("XBLK%d n%d m%d sub" % (i, i, i))
+        g = graph_mod.build(read_text(self.tmp, "\n".join(body) + "\n"),
+                            max_elements=200)
+        self.assertEqual(len(g.boxes), 200)
         self.assertEqual(g.dropped, 50)

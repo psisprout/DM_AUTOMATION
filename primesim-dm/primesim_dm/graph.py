@@ -48,13 +48,13 @@ PASSIVE_KINDS = ("R", "C", "L")
 # one.
 SOURCE_KINDS = ("V", "I")
 
-# How many elements to draw before the size guard trims.  Set from measuring
-# rather than taste: a 900-element page loads in under half a second and
-# re-lays-out in 22ms, so this is not about speed.  It is a backstop against
-# a flattened netlist nobody meant to draw, and it wants to sit well above
-# the decks people actually check - 80 was below them, and cut the picture
-# every run.
-DEFAULT_MAX_ELEMENTS = 400
+# How many elements to draw before the size guard trims; 0 means no limit,
+# which is the default here.  Measuring is why: a 900-element page loads in
+# under half a second and re-lays-out in 22ms, so a cap was never about
+# speed, and a picture that silently leaves elements out is worse than a
+# big one.  Pass --max-elements N to put the backstop back for a flattened
+# netlist nobody meant to draw.
+DEFAULT_MAX_ELEMENTS = 0
 
 
 def _stem(net):
