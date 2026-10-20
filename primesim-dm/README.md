@@ -162,6 +162,93 @@ opaque   : 1 file(s) read for interfaces only (insides not checked)
 > 패턴은 **전체 경로**에 걸리는 정규식입니다. `pdk` 처럼 짧게 쓰면 상위 디렉토리 이름에도
 > 걸리니 `/pdk/` 나 `\.spf$` 처럼 앵커를 넣으세요.
 
+### `--profile` — 읽는 소자 종류를 DM 덱에 맞게 좁힘
+
+링크 덱의 **최상위**에 실제로 올라오는 것은 일곱 가지밖에 없습니다. IBIS 버퍼,
+채널 S-parameter, 채널 broadband SPICE 모델, package / SPF IO 모델 같은 `.subckt` 호출,
+W element, 그리고 R/L/C 와 소스입니다. 그게 `dm` 프로필이고 **기본값**입니다.
+
+| 소자 | DM 덱에서의 정체 | 노드 경계 |
+|---|---|---|
+| `X` | `.subckt` 호출 — broadband 모델, SPF IO 모델, package | `=` 없는 토큰 중 **마지막 하나(subckt 이름)를 제외하고** 앞까지 |
+| `S` | S-parameter 채널 (Touchstone) | 첫 `k=v` 전까지 |
+| `B` | IBIS 버퍼 | 첫 `k=v` 전까지 |
+| `W` | coupled transmission line | `N=` 을 읽어서 `2*(N+1)` 개 |
+| `R` `C` `L` | 수동 소자 | 2개 |
+| `V` `I` | 소스 | 2개 |
+| `K` | L 두 개 사이의 상호 인덕턴스 | 노드 없음 |
+
+이 밖의 소자(트랜지스터, 다이오드, 제어 소스 …)가 최상위에 나오면 **읽지 않고
+보고만 합니다.**
+
+```
+off prof : 2 line(s) of other element types, not read
+
+WARN  off-profile-element 2 line(s) are element types the 'dm' profile does not
+      read, so their nodes are missing from the connectivity below:
+      D (diode), M (MOSFET). Pass --profile full to read them.
+INFO  off-profile-element M_esd pad_tx 0 0 0 nch w=10u   [top.sp:35]
+INFO  off-profile-element D_esd pad_tx vddq dio          [top.sp:36]
+```
+
+어떤 줄이었는지 줄번호와 함께 다 찍힙니다. 조용히 빼는 게 아니라 **영향 있었는지 한 번은
+눈으로 확인하라는 리스트**입니다. 읽히게 하려면 `--profile full` 을 주시면 전에 하던
+대로 전부 읽습니다.
+
+```bash
+primesim-dm lint  top.sp               # dm (기본)
+primesim-dm lint  top.sp --profile full
+primesim-dm graph top.sp --profile full -o g.html
+```
+
+`lint` / `terminate` / `graph` 에 같이 붙어 있어서 세 명령이 **동일한 연결성을** 봅니다.
+
+> `Y` 처럼 어떤 프로필에도 없는 글자는 `off-profile` 이 아니라 기존대로
+> `unparsed` 입니다. "이 덱은 안 쓰는 소자"와 "노드 경계를 모르겠다"는 다른 문제라
+> 섞지 않습니다.
+
+#### `.subckt` 속은 여전히 안 읽습니다
+
+프로필은 **최상위에만** 적용됩니다. broadband 모델 속은 `E`/`G` 제어 소스로 가득하지만,
+`.subckt` 바디는 어차피 읽지 않으니 `off-profile` 로 뜨지 않습니다. 포트 목록(인터페이스)만
+가지고 있습니다.
+
+```
+subckts  : 2 definition(s) available (insides not read)
+```
+
+### IBIS / S-parameter 파일 자체 검사
+
+`.include` 는 없으면 에러가 나지만, **IBIS 와 Touchstone 파일은 소자 줄에서 이름으로
+불립니다.** 아니면 아무도 안 봅니다 — S-parameter가 안 읽힌 채널은 에러가 아니라
+**개방(open)으로 돌아갑니다.**
+
+| 코드 | 언제 |
+|---|---|
+| `missing-model-file` (ERROR) | `B` 의 `file=` / `S` 의 `tstonefile=` 가 디스크에 없을 때 |
+| `sparam-ports` (ERROR) | `S` 의 노드 수가 `.sNp` 의 포트 수와 안 맞을 때 |
+| `ibis-incomplete` (WARN) | `B` 에 `file=` / `model=` / `buffer=` 가 빠졌을 때 |
+
+```
+ERROR missing-model-file Bdrv names IBIS file dq_v6.ibs, which is not on any of
+      the directories searched. Add --search-dir, or fix the path.  [top.sp:8]
+ERROR sparam-ports       S_board has 2 node(s) but board_dq.s4p is a 4-port
+      file; it takes 4 node(s), or 5 with a reference node  [chan.model:1]
+```
+
+포트 수는 **확장자 `.s4p` 에서** 읽습니다. 노드는 N개 또는 reference 노드를 붙인
+N+1개만 정상으로 봅니다. 확장자가 `.sNp` 꼴이 아니면 **아무 주장도 하지 않습니다.**
+
+파일 이름이 `.model` 에 있는 일반적인 형태도 따라갑니다:
+
+```
+S_board ball_tx ball_rx ball_tx_ret ball_rx_ret mname=ch_dq
+.model ch_dq S tstonefile='board_dq.s4p'
+```
+
+파일을 찾는 순서는 `.include` 와 동일합니다 (이름 부른 파일의 디렉토리 → 최상위 덱
+디렉토리 → cwd → `--search-dir`).
+
 ### `--si` — signal 노드는 소자 2개 (SI 덱 전용)
 
 SI 덱에서 signal 노드는 **드라이버 하나 + 리시버 하나**로 딱 2개가 붙는 게 정상입니다.

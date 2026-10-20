@@ -33,13 +33,14 @@ class Harness(unittest.TestCase):
 
 
 class TestNodeSplitting(Harness):
-    def nodes_of(self, line, name):
-        dk, _c, _f = self.lint(line + "\n")
+    def nodes_of(self, line, name, profile=deck.DEFAULT_PROFILE):
+        path = self.write("d.sp", line + "\n")
+        dk = deck.read([path], search_dirs=[self.dir], profile=profile)
         for el in dk.elements:
             if el.name.lower() == name.lower():
                 return el.nodes
-        raise AssertionError("no element %s (unparsed: %s)"
-                             % (name, dk.unparsed))
+        raise AssertionError("no element %s (unparsed: %s, off profile: %s)"
+                             % (name, dk.unparsed, dk.off_profile))
 
     def test_two_terminal(self):
         self.assertEqual(self.nodes_of("R1 a b 1k", "R1"), ["a", "b"])
@@ -51,13 +52,17 @@ class TestNodeSplitting(Harness):
                          ["a", "b", "c"])
 
     def test_mosfet_keeps_four_nodes(self):
-        self.assertEqual(self.nodes_of("M1 nd ng ns nb nch w=1u l=30n", "M1"),
-                         ["nd", "ng", "ns", "nb"])
+        self.assertEqual(
+            self.nodes_of("M1 nd ng ns nb nch w=1u l=30n", "M1",
+                          profile="full"),
+            ["nd", "ng", "ns", "nb"])
 
     def test_bjt_three_or_four(self):
-        self.assertEqual(self.nodes_of("Q1 nc nb ne npn", "Q1"),
+        self.assertEqual(self.nodes_of("Q1 nc nb ne npn", "Q1",
+                                       profile="full"),
                          ["nc", "nb", "ne"])
-        self.assertEqual(self.nodes_of("Q2 nc nb ne ns npn", "Q2"),
+        self.assertEqual(self.nodes_of("Q2 nc nb ne ns npn", "Q2",
+                                       profile="full"),
                          ["nc", "nb", "ne", "ns"])
 
     def test_s_element_stops_at_first_param(self):

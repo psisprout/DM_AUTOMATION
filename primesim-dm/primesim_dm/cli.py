@@ -225,7 +225,7 @@ def cmd_lint(args):
                        follow_includes=not args.no_includes,
                        search_dirs=args.search_dir or [],
                        opaque=opaque, skip=args.skip or [],
-                       max_depth=args.max_depth)
+                       max_depth=args.max_depth, profile=args.profile)
     if not dk.files:
         return _err("could not read any of: %s" % ", ".join(args.deck))
     checker = check_mod.Checker(dk, short_ohms=args.short_ohms,
@@ -267,7 +267,9 @@ def _read_deck(args):
                          follow_includes=not args.no_includes,
                          search_dirs=args.search_dir or [],
                          opaque=opaque, skip=args.skip or [],
-                         max_depth=args.max_depth)
+                         max_depth=args.max_depth,
+                         profile=getattr(args, "profile",
+                                         deck_mod.DEFAULT_PROFILE))
 
 
 def cmd_terminate(args):
@@ -379,6 +381,14 @@ def cmd_graph(args):
     if dk.skipped_files:
         header.append("%d file(s) skipped, their elements are not drawn"
                       % len(dk.skipped_files))
+    if dk.off_profile:
+        kinds = sorted(set(k for _p, _l, _t, k in dk.off_profile))
+        header.append("%d line(s) are element types --profile %s does not "
+                      "read (%s), so they are not drawn"
+                      % (len(dk.off_profile), dk.profile, " ".join(kinds)))
+    if dk.unparsed:
+        header.append("%d line(s) could not be split into nodes, so they are "
+                      "not drawn" % len(dk.unparsed))
     if g.dropped:
         header.append("%d least-connected element(s) not drawn - listed "
                       "under 'past --max-elements'; raise --max-elements "
@@ -480,6 +490,8 @@ def build_parser():
                         "libraries and the like)")
     s.add_argument("--max-depth", type=int, metavar="N",
                    help="follow includes at most N levels deep")
+    s.add_argument("--profile", choices=sorted(deck_mod.PROFILES),
+                   default=deck_mod.DEFAULT_PROFILE, help='which element types to read. "dm" (the default) reads only what a link deck is built from - subckt calls (channel broadband model, SPF IO model, package), IBIS buffers, S-parameter channels, W lines, R/L/C and sources - and reports anything else instead of guessing at it. "full" also reads transistors, diodes and controlled sources')
     s.add_argument("--force-connectivity", action="store_true",
                    help="run the floating/isolated checks even when includes "
                         "are missing (results will be noisy)")
@@ -543,6 +555,9 @@ def build_parser():
     s.add_argument("--no-default-opaque", action="store_true")
     s.add_argument("--skip", action="append", metavar="REGEX")
     s.add_argument("--max-depth", type=int, metavar="N")
+    s.add_argument("--profile", choices=sorted(deck_mod.PROFILES),
+                   default=deck_mod.DEFAULT_PROFILE,
+                   help="which element types to read (see lint --help)")
     s.add_argument("--force", action="store_true",
                    help="proceed even though includes are missing")
     s.set_defaults(func=cmd_terminate)
@@ -594,6 +609,9 @@ def build_parser():
     s.add_argument("--no-default-opaque", action="store_true")
     s.add_argument("--skip", action="append", metavar="REGEX")
     s.add_argument("--max-depth", type=int, metavar="N")
+    s.add_argument("--profile", choices=sorted(deck_mod.PROFILES),
+                   default=deck_mod.DEFAULT_PROFILE,
+                   help="which element types to read (see lint --help)")
     s.set_defaults(func=cmd_graph)
 
     s = sub.add_parser("check", help="print the connectivity report only")

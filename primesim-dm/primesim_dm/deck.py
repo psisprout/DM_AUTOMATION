@@ -16,16 +16,92 @@ import re
 
 from . import spice
 
-# how many nodes each element type takes, when it is a fixed number
-_FIXED_NODES = {
-    "R": 2, "C": 2, "L": 2, "V": 2, "I": 2, "D": 2,
-    "E": 4, "G": 4, "F": 2, "H": 2, "T": 4,
+# ---------------------------------------------------------------- profiles
+#
+# What a DM link deck is actually made of.  A channel model, a package, an
+# IO model and the passives around them - nothing else appears at the top
+# level.  Reading a line as an element type the deck does not use is how a
+# parser invents connectivity that is not there, so the profile is a closed
+# list and anything outside it is reported rather than guessed at.
+#
+#   letter -> (what it is, how its node list ends)
+#
+# node rules:
+#   an int    exactly that many nodes
+#   "model"   nodes are every non-parameter token but the last, which names
+#             the .subckt or .model being called
+#   "kv"      nodes run until the first key=value token
+#   "wline"   2*(N+1) nodes, with N from the N= parameter
+#   "none"    no nodes at all
+DM_PROFILE = {
+    "X": ("subckt call - channel broadband SPICE model, SPF IO model, "
+          "package, any .subckt", "model"),
+    "S": ("S-parameter channel (Touchstone)", "kv"),
+    "B": ("IBIS buffer", "kv"),
+    "W": ("coupled transmission line", "wline"),
+    "R": ("resistor", 2),
+    "C": ("capacitor", 2),
+    "L": ("inductor", 2),
+    "V": ("voltage source", 2),
+    "I": ("current source", 2),
+    "K": ("mutual inductance between two L's", "none"),
 }
-# these end their node list at the first key=value token
-_KV_TERMINATED = ("S", "B", "P")
-# these end with a model name: nodes are every non-parameter token but the last
-_MODEL_TERMINATED = ("X", "Q", "M", "J", "Z")
-_NO_NODES = ("K",)
+
+# The rest of what HSPICE has.  Not wrong, just not what a link deck is
+# made of: a transistor or a diode at the top level is either somebody
+# else's deck, or a line that was read as the wrong thing.  --profile full
+# brings them back.
+FULL_PROFILE = dict(DM_PROFILE)
+FULL_PROFILE.update({
+    "D": ("diode", 2),
+    "E": ("voltage-controlled voltage source", 4),
+    "G": ("voltage-controlled current source", 4),
+    "F": ("current-controlled current source", 2),
+    "H": ("current-controlled voltage source", 2),
+    "T": ("lossless transmission line", 4),
+    "P": ("port", "kv"),
+    "Q": ("BJT", "model"),
+    "M": ("MOSFET", "model"),
+    "J": ("JFET", "model"),
+    "Z": ("MESFET / HEMT", "model"),
+})
+
+PROFILES = {"dm": DM_PROFILE, "full": FULL_PROFILE}
+DEFAULT_PROFILE = "dm"
+
+
+def profile_table(name):
+    """The element table ``name`` selects."""
+    try:
+        return PROFILES[name]
+    except KeyError:
+        raise ValueError("unknown profile %r; pick one of %s"
+                         % (name, ", ".join(sorted(PROFILES))))
+
+
+def profile_letters(name):
+    """The element letters a profile reads, in a stable order."""
+    return sorted(profile_table(name))
+
+
+class OffProfile(Exception):
+    """This element type is not one the active profile reads."""
+
+    def __init__(self, kind):
+        Exception.__init__(self, kind)
+        self.kind = kind
+
+
+# key=value parameters that name an external model file, per element type
+_FILE_PARAMS = {
+    "B": ("file", "ibis_file"),
+    "S": ("tstonefile", "sparamfile", "file"),
+}
+# ... and the one that names a model inside it
+_MODEL_PARAMS = {
+    "B": ("model", "ibis_model"),
+    "S": ("mname", "model"),
+}
 
 # Files whose insides never matter for a DM connectivity check: parasitic
 # extractions are enormous and describe the inside of a cell, not how the
@@ -33,6 +109,7 @@ _NO_NODES = ("K",)
 DEFAULT_OPAQUE = [r"\.spf$", r"\.dspf$", r"\.spef$", r"\.rcx$"]
 
 _DOT_CONNECT = re.compile(r"^\s*\.connect\s+(\S+)\s+(\S+)", re.I)
+_DOT_MODEL = re.compile(r"^\s*\.model\s+(\S+)\s+(\S+)(.*)", re.I | re.S)
 _DOT_GLOBAL = re.compile(r"^\s*\.global\s+(.*)", re.I)
 _DOT_SUBCKT = re.compile(r"^\s*\.subckt\b", re.I)
 _DOT_ENDS = re.compile(r"^\s*\.ends\b", re.I)
@@ -65,11 +142,76 @@ class Element(object):
         rest = [t for t in self.tail if not is_kv(t)]
         return rest[0] if rest else None
 
+    def param(self, *names):
+        """The value of the first of ``names`` this element sets, or None.
+
+        Names are compared case-insensitively and the value comes back
+        unquoted, because ``file='x.ibs'`` and ``FILE=x.ibs`` are the same
+        line to the simulator.
+        """
+        wanted = [n.lower() for n in names]
+        for tok in self.tail:
+            if not is_kv(tok):
+                continue
+            key, _, val = tok.partition("=")
+            if key.lower() in wanted:
+                return val.strip().strip("'\"")
+        return None
+
+    def model_file(self):
+        """The external model file this element names, or None.
+
+        An IBIS buffer carries its .ibs file and an S element its Touchstone
+        file on the element line itself; everything else gets its model from
+        an .include, which is checked elsewhere.
+        """
+        return self.param(*_FILE_PARAMS.get(self.kind, ()))
+
+    def model_name(self):
+        """The model this element selects inside that file, or None.
+
+        For an X instance that is the subckt token; for a B element the IBIS
+        model name; for an S element the ``.model`` it refers to.
+        """
+        if self.kind == "X":
+            return self.subckt
+        return self.param(*_MODEL_PARAMS.get(self.kind, ()))
+
     def where(self):
         return "%s:%d" % (os.path.basename(self.path), self.line)
 
     def __repr__(self):
         return "<%s %s %d nodes>" % (self.kind, self.name, len(self.nodes))
+
+
+class SModel(object):
+    """A ``.model <name> S ...`` block - an S-parameter channel's data file.
+
+    An S element usually names its Touchstone file indirectly::
+
+        S1 in out mname=ch
+        .model ch S tstonefile='ch.s4p'
+
+    so the file cannot be checked without reading the .model line too.
+    """
+
+    def __init__(self, name, params, path, line):
+        self.name = name
+        self.params = params          # lower key -> unquoted value
+        self.path = path
+        self.line = line
+
+    def file(self):
+        for key in ("tstonefile", "sparamfile", "file"):
+            if key in self.params:
+                return self.params[key]
+        return None
+
+    def where(self):
+        return "%s:%d" % (os.path.basename(self.path), self.line)
+
+    def __repr__(self):
+        return "<SModel %s %s>" % (self.name, self.file())
 
 
 class Deck(object):
@@ -87,6 +229,10 @@ class Deck(object):
         self.unused_filters = []   # --opaque/--skip patterns that hit nothing
         self.depth_limited = []    # includes below these were not followed
         self.net_users = {}        # net -> [(element, port_index)]
+        self.profile = DEFAULT_PROFILE
+        self.off_profile = []      # (path, line, text, kind) not read at all
+        self.s_models = {}         # lower name -> SModel
+        self.deck_dirs = []        # directories of the top deck file(s)
 
     def index_nets(self):
         self.net_users = {}
@@ -99,12 +245,29 @@ class Deck(object):
         return sorted(self.net_users)
 
 
-def _split_nodes(tokens, kind, deck_subckts):
-    """Return ``(nodes, tail)`` or raise ValueError if it cannot be decided."""
-    if kind in _NO_NODES:
+def _split_nodes(tokens, kind, profile=None):
+    """Return ``(nodes, tail)`` for one element line.
+
+    ``profile`` is an element table from :data:`PROFILES`; it decides both
+    which element types are read at all and where each one's node list
+    ends.  Raises :class:`OffProfile` when the table does not carry this
+    element type, and ``ValueError`` when it does but the line cannot be
+    split confidently - the caller records either rather than guessing.
+    """
+    table = DM_PROFILE if profile is None else profile
+    try:
+        _what, rule = table[kind]
+    except KeyError:
+        if kind in FULL_PROFILE:
+            # a known element type this profile leaves out, which is a
+            # statement about the deck rather than a gap in the parser
+            raise OffProfile(kind)
+        raise ValueError("unhandled element type %r" % kind)
+
+    if rule == "none":
         return [], tokens
 
-    if kind in _MODEL_TERMINATED:
+    if rule == "model":
         # Xname n1 .. nN subcktname [k=v ...]   /   M1 nd ng ns nb model w=..
         head = []
         for t in tokens:
@@ -116,7 +279,7 @@ def _split_nodes(tokens, kind, deck_subckts):
         # the last non-parameter token is the model or subckt being called
         return head[:-1], tokens[len(head) - 1:]
 
-    if kind == "W":
+    if rule == "wline":
         n = None
         for t in tokens:
             if is_kv(t) and t.split("=", 1)[0].lower() == "n":
@@ -133,7 +296,7 @@ def _split_nodes(tokens, kind, deck_subckts):
                              % (n, len(tokens)))
         return tokens[:count], tokens[count:]
 
-    if kind in _KV_TERMINATED:
+    if rule == "kv":
         nodes = []
         for t in tokens:
             if is_kv(t):
@@ -143,9 +306,7 @@ def _split_nodes(tokens, kind, deck_subckts):
             raise ValueError("no nodes before the first key=value")
         return nodes, tokens[len(nodes):]
 
-    count = _FIXED_NODES.get(kind)
-    if count is None:
-        raise ValueError("unhandled element type %r" % kind)
+    count = rule                            # a fixed node count
     if len(tokens) < count:
         raise ValueError("expected %d nodes, line has %d tokens"
                          % (count, len(tokens)))
@@ -228,8 +389,26 @@ def _resolve(raw, dirs):
     return None
 
 
+def find_file(deck, raw, from_path=None):
+    """Resolve a path named inside a deck, the way an include is resolved.
+
+    An IBIS or Touchstone file is named on an element line rather than an
+    .include, but the simulator looks for it in the same places, so the
+    search order has to match: the naming file's own directory, then the top
+    deck's, then the current directory, then anything --search-dir added.
+    """
+    if from_path:
+        base = os.path.dirname(os.path.abspath(from_path))
+    elif deck.deck_dirs:
+        base = deck.deck_dirs[0]
+    else:
+        base = os.getcwd()
+    dirs = resolve_dirs(base, deck.deck_dirs, deck.searched_dirs)
+    return _resolve(raw, dirs)
+
+
 def read(paths, follow_includes=True, search_dirs=(), fold_case=True,
-         opaque=None, skip=(), max_depth=None):
+         opaque=None, skip=(), max_depth=None, profile=DEFAULT_PROFILE):
     """Parse one or more deck files into a :class:`Deck`.
 
     ``opaque`` and ``skip`` are path patterns that draw a boundary around the
@@ -238,16 +417,26 @@ def read(paths, follow_includes=True, search_dirs=(), fold_case=True,
     up its ``.subckt`` interfaces, so port counts stay checkable; a skipped
     one is not opened at all.  ``max_depth`` stops the walk after N levels of
     include.
+
+    ``profile`` picks the element table (see :data:`PROFILES`).  The default
+    ``"dm"`` reads only what a link deck is built from - subckt calls, IBIS
+    buffers, S-parameter channels, W lines, R/L/C and sources - and records
+    every other element type in :attr:`Deck.off_profile` instead of reading
+    it.  Either way only the top level is read; the inside of a ``.subckt``
+    is never part of the connectivity.
     """
+    table = profile_table(profile)
     opaque_f = PathFilter(DEFAULT_OPAQUE if opaque is None else opaque)
     skip_f = PathFilter(skip)
 
     deck = Deck()
+    deck.profile = profile
     # a file can legitimately be read twice under two different .lib
     # sections, so the queue and the seen-set are keyed on both
     queue = [(p, None, 0) for p in paths]
     seen = set()
     deck_dirs = [os.path.dirname(os.path.abspath(p)) for p in paths]
+    deck.deck_dirs = list(deck_dirs)
     deck.searched_dirs = []
 
     def norm(net):
@@ -327,6 +516,17 @@ def read(paths, follow_includes=True, search_dirs=(), fold_case=True,
                 deck.connects.append((norm(m.group(1)), norm(m.group(2)),
                                       "%s:%d" % (path, lineno)))
                 continue
+            m = _DOT_MODEL.match(line)
+            if m and m.group(2).strip().lower() == "s":
+                params = {}
+                for tok in spice._tokenize(m.group(3)):
+                    if is_kv(tok):
+                        key, _, val = tok.partition("=")
+                        params[key.lower()] = val.strip().strip("'\"")
+                key = m.group(1).lower()
+                deck.s_models.setdefault(
+                    key, SModel(m.group(1), params, path, lineno))
+                continue
             if line.lstrip().startswith("."):
                 continue                   # any other directive
 
@@ -336,7 +536,12 @@ def read(paths, follow_includes=True, search_dirs=(), fold_case=True,
             name = toks[0]
             kind = name[0].upper()
             try:
-                nodes, tail = _split_nodes(toks[1:], kind, deck.subckts)
+                nodes, tail = _split_nodes(toks[1:], kind, table)
+            except OffProfile:
+                # a known element type this profile does not read: say so,
+                # because its nodes are missing from the graph either way
+                deck.off_profile.append((path, lineno, line, kind))
+                continue
             except ValueError as exc:
                 deck.unparsed.append((path, lineno, line, str(exc)))
                 continue

@@ -10,10 +10,16 @@ import hashlib
 import os
 import re
 
+from . import deck as deck_mod
 from .references import REFERENCE_OPTION_FILES, REFERENCE_PATTERN_FILES
 
 # two-terminal passives, for --si-ignore-passives
 PASSIVE_KINDS = ("R", "C", "L")
+
+# ``channel.s4p`` -> 4 ports.  The extension is the only machine-readable
+# statement of a Touchstone file's port count that does not need the file to
+# be open, and it is the one thing about these files that is standardised.
+_SNP = re.compile(r"\.s(\d+)p$", re.I)
 
 SEV_ERROR = "error"
 SEV_WARN = "warn"
@@ -228,6 +234,109 @@ class Checker(object):
                              "no file this deck reads has the same content as "
                              "the reference %s file %s" % (kind, ref))
 
+    def check_profile(self):
+        """Element types the active profile did not read."""
+        if not self.deck.off_profile:
+            return
+        kinds = sorted(set(k for _p, _l, _t, k in self.deck.off_profile))
+        named = ", ".join("%s (%s)" % (k, deck_mod.FULL_PROFILE[k][0])
+                          if k in deck_mod.FULL_PROFILE else k
+                          for k in kinds)
+        self.add(SEV_WARN, "off-profile-element",
+                 "%d line(s) are element types the %r profile does not read, "
+                 "so their nodes are missing from the connectivity below: %s. "
+                 "Pass --profile full to read them."
+                 % (len(self.deck.off_profile), self.deck.profile, named))
+        for path, line, text, _kind in self.deck.off_profile[:20]:
+            self.add(SEV_INFO, "off-profile-element", text[:90],
+                     "%s:%d" % (os.path.basename(path), line))
+
+    def sparam_file(self, el):
+        """``(raw path, where it was named)`` for an S element, or (None, '').
+
+        The file is on the element line only when the channel was written
+        that way; the common form puts it on a ``.model`` the element points
+        at with ``mname=``.
+        """
+        raw = el.model_file()
+        if raw:
+            return raw, el.where()
+        name = el.model_name()
+        if not name:
+            return None, ""
+        model = self.deck.s_models.get(name.lower())
+        if model is None:
+            return None, ""
+        return model.file(), model.where()
+
+    def check_model_files(self):
+        """The .ibs and Touchstone files the deck names, on disk.
+
+        An .include that cannot be found is already an error; these files are
+        named on an element line instead, so nothing else would notice them
+        missing - and a channel whose S-parameters never loaded simulates as
+        an open, not as an error.
+        """
+        for el in self.deck.elements:
+            if el.kind == "S":
+                raw, where = self.sparam_file(el)
+                what = "S-parameter file"
+            else:
+                raw, where = el.model_file(), el.where()
+                what = "IBIS file" if el.kind == "B" else "model file"
+            if not raw:
+                continue
+            if deck_mod.find_file(self.deck, raw, el.path) is None:
+                self.add(SEV_ERROR, "missing-model-file",
+                         "%s names %s %s, which is not on any of the "
+                         "directories searched. Add --search-dir, or fix the "
+                         "path." % (el.name, what, raw), where or el.where())
+
+    def check_sparam_ports(self):
+        """An S element's node count against its Touchstone port count.
+
+        A ``.s4p`` wired to six nodes is not caught by anything else: the
+        simulator takes the nodes it was given and the file it was given, and
+        a mismatch shows up as a channel that behaves nothing like the one
+        that was measured.
+        """
+        for el in self.deck.elements:
+            if el.kind != "S":
+                continue
+            raw, where = self.sparam_file(el)
+            if not raw:
+                continue
+            m = _SNP.search(raw)
+            if not m:
+                continue                   # no port count to compare against
+            ports = int(m.group(1))
+            got = len(el.nodes)
+            if got in (ports, ports + 1):
+                continue                   # the reference node is optional
+            self.add(SEV_ERROR, "sparam-ports",
+                     "%s has %d node(s) but %s is a %d-port file; it takes "
+                     "%d node(s), or %d with a reference node"
+                     % (el.name, got, os.path.basename(raw), ports,
+                        ports, ports + 1), where or el.where())
+
+    def check_ibis(self):
+        """An IBIS buffer that does not say which buffer it is."""
+        for el in self.deck.elements:
+            if el.kind != "B":
+                continue
+            missing = []
+            if not el.param("file", "ibis_file"):
+                missing.append("file=")
+            if not el.param("model", "ibis_model"):
+                missing.append("model=")
+            if not el.param("buffer"):
+                missing.append("buffer=")
+            if missing:
+                self.add(SEV_WARN, "ibis-incomplete",
+                         "%s is an IBIS buffer with no %s, so which buffer it "
+                         "is cannot be told from the deck"
+                         % (el.name, " and no ".join(missing)), el.where())
+
     def check_si_nodes(self):
         """An SI node joins exactly two things - one driver, one receiver.
 
@@ -356,6 +465,10 @@ class Checker(object):
         self.check_includes()
         self.check_filters()
         self.check_unparsed()
+        self.check_profile()
+        self.check_model_files()
+        self.check_sparam_ports()
+        self.check_ibis()
         self.check_reference_files()
         self.check_si_nodes()
         self.check_duplicate_names()
@@ -482,7 +595,14 @@ def render(deck, findings, counts, verbose=False, limit=10, summary_only=False):
         out.append("           %s" % f)
     out.append("elements : %d at the top level" % len(deck.elements))
     out.append("nets     : %d" % len(deck.net_users))
-    out.append("subckts  : %d definition(s) available" % len(deck.subckts))
+    out.append("subckts  : %d definition(s) available (insides not read)"
+               % len(deck.subckts))
+    out.append("profile  : %s - reads %s"
+               % (deck.profile, " ".join(deck_mod.profile_letters(
+                   deck.profile))))
+    if deck.off_profile:
+        out.append("off prof : %d line(s) of other element types, not read"
+                   % len(deck.off_profile))
     if deck.opaque_files:
         out.append("opaque   : %d file(s) read for interfaces only "
                    "(insides not checked)" % len(deck.opaque_files))
