@@ -113,12 +113,22 @@ def logical_lines(text):
     """Yield ``(lineno, joined_text)``, folding ``+`` continuations.
 
     ``lineno`` is the 1-based line number of the *first* physical line.
+
+    A line that ends inside an open ``'...'`` expression also runs on into
+    the next one, so a long ``.param`` wrapped without ``+`` stays one
+    statement instead of turning its next line into a bogus element.  A
+    line starting with ``.`` always begins a new statement, so one stray
+    quote cannot swallow the rest of the deck.
     """
     buf = []
     start = 0
     for n, raw in enumerate(text.splitlines(), 1):
         code = strip_comments(raw)
         if not code.strip():
+            continue
+        if (buf and " ".join(buf).count("'") % 2
+                and not code.lstrip().startswith(".")):
+            buf.append(code.strip())
             continue
         if _CONT.match(code):
             if not buf:

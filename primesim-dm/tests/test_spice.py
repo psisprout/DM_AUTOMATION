@@ -19,6 +19,23 @@ class TestLines(unittest.TestCase):
         self.assertEqual(got[0], (1, ".subckt foo a b  c d"))
         self.assertEqual(got[1][1], "R1 a b 1k")
 
+    def test_open_quote_runs_on(self):
+        # wrapped without '+': the next line must not become an I element
+        text = (".param p(m)='a*(m==h1)+\\\\\n"
+                "    ia*(m==ia)+\\\\\n"
+                "    lb*(m==lb)+0'\n"
+                "R1 a b 1k\n")
+        got = list(spice.logical_lines(text))
+        self.assertEqual(len(got), 2)
+        self.assertEqual(got[0][0], 1)
+        self.assertTrue(got[0][1].endswith("lb*(m==lb)+0'"))
+        self.assertEqual(got[1], (4, "R1 a b 1k"))
+
+    def test_stray_quote_stops_at_directive(self):
+        text = ".param p='a\n.param q=1\n"
+        got = list(spice.logical_lines(text))
+        self.assertEqual([l for _, l in got], [".param p='a", ".param q=1"])
+
 
 class TestIncludePath(unittest.TestCase):
     """A relative path starts with a dot, so 'starts with .' cannot be the

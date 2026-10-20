@@ -25,7 +25,7 @@
 
 ```bash
 cd primesim-dm
-python3 -m unittest discover -s tests     # 218개 테스트, 전부 통과해야 정상
+python3 -m unittest discover -s tests     # 220개 테스트, 전부 통과해야 정상
 python3 -m primesim_dm lint --help
 ```
 
@@ -875,7 +875,7 @@ primesim_dm/
   graph.py       연결성 그림 + HTML 뷰어 (라이브러리 없음, file:// 로 열림)
   references.py  기준 패턴/옵션 파일 경로 ← 여기만 고치면 됩니다
   cli.py         lint / terminate / graph
-tests/           unittest (표준 라이브러리), 218개
+tests/           unittest (표준 라이브러리), 220개
 ```
 
 라이브러리로도 쓸 수 있습니다:
