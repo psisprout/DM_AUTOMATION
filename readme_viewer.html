@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>README Viewer</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" media="(prefers-color-scheme: light)">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" media="(prefers-color-scheme: dark)">
+<style>
+  :root {
+    --bg: #f6f8fa; --card: #ffffff; --fg: #1f2328; --muted: #59636e;
+    --border: #d1d9e0; --accent: #0969da; --code-bg: #f3f4f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --card: #151b23; --fg: #e6edf3; --muted: #9198a1;
+      --border: #3d444d; --accent: #4493f8; --code-bg: #212830;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.7 -apple-system, "Segoe UI", "Noto Sans KR", "Noto Sans", Helvetica, Arial, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 24px; background: var(--card); border-bottom: 1px solid var(--border);
+  }
+  header .name { font-weight: 600; }
+  header .src { color: var(--muted); font-size: 13px; }
+  header label {
+    margin-left: auto; cursor: pointer; font-size: 14px; color: var(--accent);
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px;
+  }
+  header input { display: none; }
+  .layout { display: flex; gap: 24px; max-width: 1200px; margin: 24px auto; padding: 0 16px; }
+  nav#toc {
+    flex: 0 0 230px; position: sticky; top: 70px; align-self: flex-start;
+    max-height: calc(100vh - 90px); overflow: auto; font-size: 14px;
+  }
+  nav#toc:empty { display: none; }
+  nav#toc a { display: block; color: var(--muted); text-decoration: none; padding: 3px 8px; border-radius: 4px; }
+  nav#toc a:hover { background: var(--card); color: var(--fg); }
+  nav#toc .l3 { padding-left: 20px; }
+  article {
+    flex: 1; min-width: 0; background: var(--card);
+    border: 1px solid var(--border); border-radius: 8px; padding: 32px 48px;
+  }
+  @media (max-width: 860px) {
+    nav#toc { display: none; }
+    article { padding: 20px 16px; }
+  }
+  article h1, article h2 { border-bottom: 1px solid var(--border); padding-bottom: .3em; }
+  article h1 { font-size: 2em; margin-top: 0; }
+  article a { color: var(--accent); }
+  article code {
+    background: var(--code-bg); padding: .2em .4em; border-radius: 6px;
+    font: 85% ui-monospace, "JetBrains Mono", "D2Coding", Consolas, monospace;
+  }
+  article pre { background: var(--code-bg); padding: 16px; border-radius: 6px; overflow: auto; }
+  article pre code { background: none; padding: 0; font-size: 85%; }
+  article pre code.hljs { background: none; padding: 0; }
+  article blockquote { margin: 0; padding: 0 1em; color: var(--muted); border-left: 4px solid var(--border); }
+  article table { border-collapse: collapse; display: block; overflow: auto; }
+  article th, article td { border: 1px solid var(--border); padding: 6px 13px; }
+  article tr:nth-child(2n) { background: var(--bg); }
+  article img { max-width: 100%; }
+  article hr { border: 0; height: 1px; background: var(--border); }
+  .drop { outline: 3px dashed var(--accent); outline-offset: -12px; }
+  .hint { color: var(--muted); text-align: center; padding: 40px 0; }
+</style>
+</head>
+<body>
+<header>
+  <span class="name">📄 README Viewer</span>
+  <span class="src" id="src"></span>
+  <label>다른 .md 열기<input type="file" id="picker" accept=".md,.markdown,text/markdown,text/plain"></label>
+</header>
+<div class="layout">
+  <nav id="toc"></nav>
+  <article id="content"><p class="hint">README.md 를 불러오는 중…</p></article>
+</div>
+
+<!-- view_readme.sh 가 README.md 를 base64 로 여기에 넣는다 -->
+<script id="embedded" type="text/plain"></script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+  const $content = document.getElementById('content');
+  const $toc = document.getElementById('toc');
+  const $src = document.getElementById('src');
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+
+  function slugify(text, used) {
+    let base = text.trim().toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, '').replace(/\s+/g, '-') || 'section';
+    let slug = base, i = 1;
+    while (used.has(slug)) slug = `${base}-${i++}`;
+    used.add(slug);
+    return slug;
+  }
+
+  function render(md, source) {
+    $src.textContent = source || '';
+    document.title = (source || 'README') + ' — README Viewer';
+
+    if (window.marked) {
+      $content.innerHTML = marked.parse(md, { gfm: true, breaks: false });
+    } else {
+      // CDN 에 접근 못하면 원문 그대로라도 보여준다
+      $content.innerHTML = '<pre>' + escapeHtml(md) + '</pre>';
+    }
+
+    if (window.hljs) {
+      $content.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+    }
+
+    // 목차 생성 (h1~h3)
+    const used = new Set();
+    $toc.innerHTML = '';
+    const heads = $content.querySelectorAll('h1, h2, h3');
+    if (heads.length > 1) {
+      heads.forEach(h => {
+        h.id = slugify(h.textContent, used);
+        const a = document.createElement('a');
+        a.href = '#' + h.id;
+        a.textContent = h.textContent;
+        a.className = 'l' + h.tagName[1];
+        $toc.appendChild(a);
+      });
+    }
+  }
+
+  function decodeBase64Utf8(b64) {
+    const bin = atob(b64.replace(/\s+/g, ''));
+    const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+    return new TextDecoder('utf-8').decode(bytes);
+  }
+
+  function readFile(file) {
+    const reader = new FileReader();
+    reader.onload = () => render(reader.result, file.name);
+    reader.readAsText(file, 'utf-8');
+  }
+
+  async function load() {
+    // 1) view_readme.sh 로 열었을 때: 내장된 내용 사용
+    const embedded = document.getElementById('embedded').textContent.trim();
+    if (embedded) {
+      const name = document.getElementById('embedded').dataset.name || 'README.md';
+      return render(decodeBase64Utf8(embedded), name);
+    }
+    // 2) http 서버로 열었을 때: 같은 폴더의 README.md 를 가져옴
+    try {
+      const res = await fetch('README.md', { cache: 'no-store' });
+      if (!res.ok) throw new Error(res.status);
+      return render(await res.text(), 'README.md');
+    } catch (e) {
+      // 3) file:// 로 직접 열면 Firefox 보안정책상 fetch 가 막힌다 → 직접 선택
+      $content.innerHTML =
+        '<p class="hint">README.md 를 자동으로 읽을 수 없습니다.<br>' +
+        '오른쪽 위 <b>다른 .md 열기</b> 를 누르거나 파일을 이 창에 끌어다 놓으세요.<br>' +
+        '또는 터미널에서 <code>./view_readme.sh</code> 로 실행하세요.</p>';
+    }
+  }
+
+  document.getElementById('picker').addEventListener('change', e => {
+    if (e.target.files[0]) readFile(e.target.files[0]);
+  });
+  document.addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('drop'); });
+  document.addEventListener('dragleave', () => document.body.classList.remove('drop'));
+  document.addEventListener('drop', e => {
+    e.preventDefault();
+    document.body.classList.remove('drop');
+    if (e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]);
+  });
+
+  load();
+</script>
+</body>
+</html>
