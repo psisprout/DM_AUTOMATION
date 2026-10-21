@@ -82,10 +82,14 @@
   <article id="content"><p class="hint">README.md 를 불러오는 중…</p></article>
 </div>
 
-<!-- view_readme.sh 가 README.md 를 base64 로 여기에 넣는다 -->
+<!-- view_readme.py 가 README.md 를 base64 로 여기에 넣는다 -->
 <script id="embedded" type="text/plain"></script>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<!-- 마크다운 파서: 로컬 파일 우선 (인터넷 없어도 동작), 없으면 CDN -->
+<script src="vendor/marked.min.js"></script>
+<script>
+  if (!window.marked) document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"><\/script>');
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <script>
   const $content = document.getElementById('content');
@@ -164,7 +168,7 @@
       $content.innerHTML =
         '<p class="hint">README.md 를 자동으로 읽을 수 없습니다.<br>' +
         '오른쪽 위 <b>다른 .md 열기</b> 를 누르거나 파일을 이 창에 끌어다 놓으세요.<br>' +
-        '또는 터미널에서 <code>./view_readme.sh</code> 로 실행하세요.</p>';
+        '또는 터미널에서 <code>python3 view_readme.py</code> 로 실행하세요.</p>';
     }
   }
 
