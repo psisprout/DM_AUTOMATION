@@ -73,11 +73,49 @@ primesim-dm terminate /proj/sim/lpddr_write.sp -o term.inc
 ```
 
 ```spice
-Rterm_1   en_rx      0   1T   $ XRX port 1 (lpddr_write.sp:14)
+Rterm_1   ball_dq0   0   1T   $ XPKG_DQ0 port 1 (lpddr_write.sp:9)
+Rterm_2   ball_dq1   0   1T   $ XPKG_DQ1 port 1 (lpddr_write.sp:10)
+Rterm_3   odt0       0   1T   $ XIO_DQ0 port 3 (lpddr_write.sp:7)
+Rterm_4   odt1       0   1T   $ XIO_DQ1 port 3 (lpddr_write.sp:8)
+Rterm_5   rxd0       0   1T   $ XIO_DQ0 port 2 (lpddr_write.sp:7)
+Rterm_6   rxd1       0   1T   $ XIO_DQ1 port 2 (lpddr_write.sp:8)
+Rterm_7   txd0       0   1T   $ XIO_DQ0 port 1 (lpddr_write.sp:7)
+Rterm_8   txd1       0   1T   $ XIO_DQ1 port 1 (lpddr_write.sp:8)
 ```
 
-한쪽만 연결된 노드마다 `1T` 저항을 접지에 붙이는 줄을 만듭니다. 줄 끝에 어느 인스턴스의 몇 번 포트인지 적혀 있습니다.
+한쪽만 연결된 노드마다 종단 소자를 한 줄씩 만듭니다. 줄 끝에는 그 노드가 어느 인스턴스의 몇 번 포트에서 나왔는지 적혀 있습니다.
 **내용을 확인한 뒤** 덱에 `.include 'term.inc'`를 넣으세요.
+
+**R / C 선택과 값**
+
+| 옵션 | 기본 | 설명 |
+|---|---|---|
+| `--type rload` | ✔ | 저항 (`Rterm_`) |
+| `--type cload` | | 커패시터 (`Cterm_`) |
+| `--type rc` | | 저항과 커패시터 둘 다 |
+| `--value` | `1T` | 저항값 |
+| `--value2` | `1f` | 커패시터값 |
+| `--to` | `0` | 반대쪽 끝을 연결할 노드 |
+
+```bash
+# R 50옴
+primesim-dm terminate /proj/sim/lpddr_write.sp --type rload --value 50 -o term.inc
+
+# C 5f
+primesim-dm terminate /proj/sim/lpddr_write.sp --type cload --value2 5f -o term.inc
+
+# R 50옴 + C 5f
+primesim-dm terminate /proj/sim/lpddr_write.sp --type rc --value 50 --value2 5f -o term.inc
+```
+
+```spice
+* --type rc --value 50 --value2 5f
+Rterm_1   ball_dq0   0   50   $ XPKG_DQ0 port 1 (lpddr_write.sp:9)
+Cterm_2   ball_dq0   0   5f   $ XPKG_DQ0 port 1 (lpddr_write.sp:9)
+Rterm_3   ball_dq1   0   50   $ XPKG_DQ1 port 1 (lpddr_write.sp:10)
+Cterm_4   ball_dq1   0   5f   $ XPKG_DQ1 port 1 (lpddr_write.sp:10)
+...
+```
 
 ---
 
@@ -123,9 +161,6 @@ Rterm_1   en_rx      0   1T   $ XRX port 1 (lpddr_write.sp:14)
 | 옵션 | 기본 | 설명 |
 |---|---|---|
 | `--nodes-only` | | 노드 목록만 출력 |
-| `--type rload\|cload\|rc` | `rload` | 저항 / 커패시터 / 둘 다 |
-| `--value` / `--value2` | `1T` / `1f` | 저항값 / 커패시턴스 |
-| `--to` | `0` | 종단이 연결될 노드 |
 | `--exclude REGEX` | | 종단하지 않을 노드 |
 | `--sort net\|instance` | `net` | 정렬 기준 |
 | `--force` | | 못 읽은 include가 있어도 생성 |
