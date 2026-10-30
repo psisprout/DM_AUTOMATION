@@ -8,7 +8,11 @@ PrimeSim 덱(`.sp`)을 읽어서 결선을 확인하는 도구입니다. 덱은 
 | `graph` | 연결을 HTML 그림으로 보여줌 |
 | `terminate` | 한쪽만 연결된 노드에 붙일 종단 저항 파일을 만듦 |
 
-준비물은 Python 3.6 이상뿐입니다. 덱은 절대 경로로 지정하세요.
+준비물은 Python 3.6 이상뿐입니다. **`primesim-dm` 폴더에 들어가서** 실행하고, 덱은 절대 경로로 지정하세요.
+
+```bash
+cd /proj/tools/primesim-dm
+```
 
 ---
 
@@ -92,10 +96,8 @@ Rterm_8   txd1       0   1T   $ XIO_DQ1 port 1 (lpddr_write.sp:8)
 |---|---|---|
 | `--type rload` | ✔ | 저항 (`Rterm_`) |
 | `--type cload` | | 커패시터 (`Cterm_`) |
-| `--type rc` | | 저항과 커패시터 둘 다 |
 | `--value` | `1T` | 저항값 |
 | `--value2` | `1f` | 커패시터값 |
-| `--to` | `0` | 반대쪽 끝을 연결할 노드 |
 
 ```bash
 # R 50옴
@@ -103,17 +105,13 @@ primesim-dm terminate /proj/sim/lpddr_write.sp --type rload --value 50 -o term.i
 
 # C 5f
 primesim-dm terminate /proj/sim/lpddr_write.sp --type cload --value2 5f -o term.inc
-
-# R 50옴 + C 5f
-primesim-dm terminate /proj/sim/lpddr_write.sp --type rc --value 50 --value2 5f -o term.inc
 ```
 
 ```spice
-* --type rc --value 50 --value2 5f
-Rterm_1   ball_dq0   0   50   $ XPKG_DQ0 port 1 (lpddr_write.sp:9)
-Cterm_2   ball_dq0   0   5f   $ XPKG_DQ0 port 1 (lpddr_write.sp:9)
-Rterm_3   ball_dq1   0   50   $ XPKG_DQ1 port 1 (lpddr_write.sp:10)
-Cterm_4   ball_dq1   0   5f   $ XPKG_DQ1 port 1 (lpddr_write.sp:10)
+* --type cload --value2 5f
+Cterm_1   ball_dq0   0   5f   $ XPKG_DQ0 port 1 (lpddr_write.sp:9)
+Cterm_2   ball_dq1   0   5f   $ XPKG_DQ1 port 1 (lpddr_write.sp:10)
+Cterm_3   odt0       0   5f   $ XIO_DQ0 port 3 (lpddr_write.sp:7)
 ...
 ```
 
