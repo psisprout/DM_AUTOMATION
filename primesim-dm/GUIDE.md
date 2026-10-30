@@ -8,19 +8,14 @@ PrimeSim 덱(`.sp`)을 읽어서 결선을 확인하는 도구입니다. 덱은 
 | `graph` | 연결을 HTML 그림으로 보여줌 |
 | `terminate` | 한쪽만 연결된 노드에 붙일 종단 저항 파일을 만듦 |
 
-준비물은 Python 3.6 이상뿐입니다. `primesim-dm/` 폴더를 복사해서 아래처럼 실행하세요.
-
-```bash
-TOOL=/proj/tools/primesim-dm/primesim-dm     # 복사한 위치
-DECK=/proj/sim/lpddr_write.sp                # 검사할 덱 (절대 경로)
-```
+준비물은 Python 3.6 이상뿐입니다. 덱은 절대 경로로 지정하세요.
 
 ---
 
 ## 1. lint --si
 
 ```bash
-$TOOL lint $DECK --si -o /proj/sim/report/lint.txt
+primesim-dm lint /proj/sim/lpddr_write.sp --si -o report.txt
 ```
 
 | 노드에 붙은 소자 | 뜻 |
@@ -43,7 +38,7 @@ WARN  floating-net    net en_rx is touched only by XRX (port 1)         [lpddr_w
 ## 2. graph
 
 ```bash
-$TOOL graph $DECK -o /proj/sim/report/graph.html
+primesim-dm graph /proj/sim/lpddr_write.sp -o graph.html
 ```
 
 만들어진 `graph.html`을 브라우저(Chrome / Edge / Firefox)로 엽니다.
@@ -74,7 +69,7 @@ $TOOL graph $DECK -o /proj/sim/report/graph.html
 ## 3. terminate
 
 ```bash
-$TOOL terminate $DECK -o /proj/sim/report/term.inc
+primesim-dm terminate /proj/sim/lpddr_write.sp -o term.inc
 ```
 
 ```spice
@@ -82,7 +77,7 @@ Rterm_1   en_rx      0   1T   $ XRX port 1 (lpddr_write.sp:14)
 ```
 
 한쪽만 연결된 노드마다 `1T` 저항을 접지에 붙이는 줄을 만듭니다. 줄 끝에 어느 인스턴스의 몇 번 포트인지 적혀 있습니다.
-**내용을 확인한 뒤** 덱에 `.include '/proj/sim/report/term.inc'`를 넣으세요.
+**내용을 확인한 뒤** 덱에 `.include 'term.inc'`를 넣으세요.
 
 ---
 
@@ -170,9 +165,9 @@ Rterm_1   en_rx      0   1T   $ XRX port 1 (lpddr_write.sp:14)
 - 숨기기는 그림에만 적용됩니다. 빨간색 여부는 항상 덱 전체를 기준으로 판정합니다.
 
 ```bash
-$TOOL graph $DECK --save-layout /proj/sim/report/deck.layout.json -o /proj/sim/report/graph.html
+primesim-dm graph /proj/sim/lpddr_write.sp --save-layout layout.json -o graph.html
 # graph.html → edit layout → 컬럼 추가, 박스 드래그 → save layout.json
-$TOOL graph $DECK --layout /proj/sim/report/deck.layout.json -o /proj/sim/report/graph.html
+primesim-dm graph /proj/sim/lpddr_write.sp --layout layout.json -o graph.html
 ```
 
 ## F. 기준 패턴·옵션 파일 확인
