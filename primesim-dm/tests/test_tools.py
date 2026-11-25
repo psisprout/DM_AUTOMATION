@@ -113,6 +113,22 @@ class TestQuestions(Harness):
             tools.deck_summary("top.sp", self.opts)
 
 
+class TestWriting(Harness):
+    def test_created_then_refused_then_modified(self):
+        out = os.path.join(self.dir, "sub", "report.txt")
+        r = tools.lint_report(self.deck, self.opts, si=True)
+        self.assertGreater(r["errors"], 0)
+        self.assertIn("si-node-fanout", r["text"])
+        self.assertEqual(tools.write_output(out, r["text"]), ([out], []))
+        with self.assertRaises(tools.OutputExists) as cm:
+            tools.write_output(out, "new")
+        self.assertEqual(cm.exception.path, out)
+        self.assertEqual(tools.write_output(out, "new", overwrite=True),
+                         ([], [out]))
+        with open(out) as fh:
+            self.assertEqual(fh.read(), "new")
+
+
 class TestCache(Harness):
     def test_reread_after_edit(self):
         tools.deck_summary(self.deck, self.opts)

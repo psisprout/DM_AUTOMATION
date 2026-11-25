@@ -243,3 +243,42 @@ def make_termination(deck_path, opts, kind="rload", value="1T", value2="1f",
         dk, floating, kind=kind, value=value, value2=value2,
         prefix="Cterm_" if kind == "cload" else "Rterm_", source=deck_path)
     return {"deck": deck_path, "count": len(floating), "text": text}
+
+
+def lint_report(deck_path, opts, si=False):
+    """The full lint report as the CLI's ``-o`` writes it, with its counts."""
+    dk = load(deck_path, opts)
+    checker = check_mod.Checker(dk, keep_nets=opts.keep_nets, si=si)
+    findings = checker.run()
+    counts = checker.counts()
+    text = check_mod.render(dk, findings, counts, verbose=True, limit=0)
+    return {"deck": deck_path, "text": text,
+            "errors": counts[check_mod.SEV_ERROR],
+            "warnings": counts[check_mod.SEV_WARN],
+            "notes": counts[check_mod.SEV_INFO],
+            "missing_includes": _incomplete(dk)}
+
+
+class OutputExists(DeckError):
+    """The output file is there already and nobody said to replace it."""
+
+    def __init__(self, path):
+        DeckError.__init__(self, "output file already exists: %s" % path)
+        self.path = path
+
+
+def write_output(path, text, overwrite=False):
+    """Write ``text`` to ``path``; return ``(created, modified)`` path lists.
+
+    An existing file is replaced only when ``overwrite`` is set: a report or
+    a .inc someone already reviewed is not something to lose silently.
+    """
+    existed = os.path.exists(path)
+    if existed and not overwrite:
+        raise OutputExists(path)
+    parent = os.path.dirname(path)
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent)
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+    return ([], [path]) if existed else ([path], [])

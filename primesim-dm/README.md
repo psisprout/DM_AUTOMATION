@@ -28,7 +28,7 @@
 
 ```bash
 cd primesim-dm
-python3 -m unittest discover -s tests     # 230개 테스트, 전부 통과해야 정상
+python3 -m unittest discover -s tests     # 231개 테스트, 전부 통과해야 정상
 python3 -m primesim_dm lint --help
 ```
 
@@ -880,7 +880,7 @@ primesim_dm/
   cli.py         lint / terminate / graph
   tools.py       질문 하나 = 함수 하나 (MCP 도구의 본체)
   mcp_server.py  tools.py 를 MCP 도구로 노출 (Python 3.10+, mcp 패키지)
-tests/           unittest (표준 라이브러리), 230개
+tests/           unittest (표준 라이브러리), 231개
 ```
 
 라이브러리로도 쓸 수 있습니다:
