@@ -14,6 +14,7 @@ import sys
 from . import check as check_mod
 from . import deck as deck_mod
 from . import graph as graph_mod
+from . import stages as stages_mod
 
 __version__ = "0.1.0"
 
@@ -119,6 +120,22 @@ def cmd_terminate(args):
 
 
 # -------------------------------------------------------------------- graph
+def _analyze(dk, args):
+    """graph --analyze: the stages the picture would be laid out by."""
+    rails = () if args.no_rails else (
+        list(graph_mod.DEFAULT_RAILS) + (args.rail or []))
+    a = stages_mod.analyze(dk, rails=rails, hub=args.hub or [],
+                           not_hub=args.not_hub or [], tx=args.tx or [])
+    text = stages_mod.render(a, title=os.path.basename(args.deck[0]))
+    if args.output:
+        with open(args.output, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        print("wrote %s" % args.output)
+    else:
+        sys.stdout.write(text)
+    return 0
+
+
 def _graph_format(output):
     """-o deck.html means html; nobody should have to say it twice."""
     ext = os.path.splitext(output or "")[1].lower()
@@ -130,6 +147,8 @@ def cmd_graph(args):
     dk = _read_deck(args)
     if not dk.files:
         return _err("could not read any of: %s" % ", ".join(args.deck))
+    if args.analyze:
+        return _analyze(dk, args)
 
     layout = None
     if args.layout and os.path.isfile(args.layout):
@@ -378,6 +397,19 @@ def build_parser():
     s.add_argument("--save-layout", metavar="FILE",
                    help="write the arrangement being drawn to a layout file, "
                         "as a starting point to edit")
+    s.add_argument("--analyze", action="store_true",
+                   help="draw nothing: print the stages (the big blocks in "
+                        "order from the driver end), the groups and the lane "
+                        "shapes the deck is made of")
+    s.add_argument("--hub", action="append", metavar="REGEX",
+                   help="--analyze: count matching instances as big blocks "
+                        "(instance or subckt name, repeatable)")
+    s.add_argument("--not-hub", action="append", metavar="REGEX",
+                   help="--analyze: never count matching instances as big "
+                        "blocks (repeatable)")
+    s.add_argument("--tx", action="append", metavar="REGEX",
+                   help="--analyze: the driver end - a block, or a driver "
+                        "hanging off one (repeatable)")
     s.add_argument("--max-elements", type=int,
                    default=graph_mod.DEFAULT_MAX_ELEMENTS, metavar="N",
                    help="draw at most N elements, the best-connected first, "

@@ -28,7 +28,7 @@
 
 ```bash
 cd primesim-dm
-python3 -m unittest discover -s tests     # 239개 테스트, 전부 통과해야 정상
+python3 -m unittest discover -s tests     # 248개 테스트, 전부 통과해야 정상
 python3 -m primesim_dm lint --help
 ```
 
@@ -811,6 +811,53 @@ CLI 를 거치지 않고 **지금 열려 있는 페이지에** layout 을 적용
   손으로 맞춰둔 게 날아간 것처럼 보이니까요.
 - `--layout` 에 준 파일이 아직 없으면 자동 배치로 그리고 그렇다고 알려줍니다.
 
+### `--analyze` — 덱의 단계(큰 블록 순서) 미리 보기
+
+그림을 그리지 않고, 덱이 **어떤 큰 블록이 어떤 순서로 이어져 있는지**를 먼저 보여줍니다.
+배치를 사람이 일일이 옮기는 대신 이 순서대로 놓기 위한 첫 단계입니다.
+
+```bash
+primesim-dm graph /proj/sim/lpddr_write.sp --analyze
+```
+
+```
+stages   : 5, from the driver end (the end the stimulus sources are on)
+  1  X_RDL_TX
+  2  X_PKG_TX
+  3  X_BRD_G0, X_BRD_G1, X_BRD_G2  <- 3 pieces, stacked
+  4  X_PKG_RX
+  5  X_RDL_RX
+groups   : by the pieces of stage 3
+  X_BRD_G0                   8 lane(s)  dq
+  X_BRD_G1                   8 lane(s)  dq
+  X_BRD_G2                   6 lane(s)  ca
+lanes    : what hangs between and around the hubs
+  x22   V + io_tx                            before 1      e.g. V_dq0
+  x21   io_rx                                after 5       e.g. XRX_dq0
+  x1    R + io_rx                            after 5       e.g. R_dq3  <- differs from the others here
+```
+
+**이름은 보지 않고 연결만 봅니다.** 인터페이스(LPDDR / NAND / HBM)나 블록 이름이 달라도 같은 방식으로 동작합니다.
+
+| 찾는 것 | 방법 |
+|---|---|
+| 큰 블록(hub) | 신호 핀이 작은 소자들보다 훨씬 많은 소자 (하위 25% 소자 핀 수의 2배 이상, 최소 4) |
+| 단계 | 자극원(V/I)이 붙은 쪽 블록부터 블록끼리 몇 번 건너가는지 |
+| 쪼개진 블록 | 같은 단계에 놓인 블록들 (보드가 byte0/byte1/CA 로 나뉜 경우) — `stacked` |
+| 1P4P | 끝에서 여러 die 로 갈라지면 마지막 단계에 쌓임 |
+| fly-by / multi-rank | 사슬 중간에서 막다른 die 는 그 rank 의 `branch` |
+| 레인 모양 | 블록을 떼어 낸 나머지 조각을 구성으로 묶음. 혼자만 다른 레인은 `differs` 표시 |
+
+R/C/L 만 3개 이상 물린 net(VTT 등 종단 전원)은 신호로 보지 않습니다.
+
+틀리게 짚었으면 고칠 수 있습니다:
+
+| 옵션 | 뜻 |
+|---|---|
+| `--hub REGEX` | 이 인스턴스(이름 또는 subckt)를 큰 블록으로 |
+| `--not-hub REGEX` | 큰 블록에서 제외 |
+| `--tx REGEX` | 드라이버 쪽 끝 (블록, 또는 거기 붙은 드라이버). 자극원이 없는 덱에서 방향을 정할 때 |
+
 ### 덱이 클 때
 
 기본으로 **연결이 많은 순으로 400개**까지만 그리고, 몇 개를 뺐는지 헤더에 적습니다
@@ -876,12 +923,13 @@ primesim_dm/
   deck.py        덱 → 소자/노드 (프로필, include 추적, opaque/skip)
   check.py       구조 검사와 리포트, 터미네이션 생성
   graph.py       연결성 그림 + HTML 뷰어 (라이브러리 없음, file:// 로 열림)
+  stages.py      graph --analyze: 큰 블록의 단계, 묶음, 레인 모양
   references.py  기준 패턴/옵션 파일 경로 ← 여기만 고치면 됩니다
   cli.py         lint / terminate / graph
   tools.py       질문 하나 = 함수 하나 (MCP 도구의 본체)
   tool_cli.py    사내 MCP 의 run_script 가 부르는 스크립트 본체 (JSON 출력)
 mcp/             사내 MCP.py 에 붙일 도구 정의, scripts/ 용 스크립트와 배포 스크립트 → MCP.md
-tests/           unittest (표준 라이브러리), 239개
+tests/           unittest (표준 라이브러리), 248개
 ```
 
 라이브러리로도 쓸 수 있습니다:
