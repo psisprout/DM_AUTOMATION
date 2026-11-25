@@ -177,8 +177,10 @@ class Element(object):
             return self.subckt
         return self.param(*_MODEL_PARAMS.get(self.kind, ()))
 
-    def where(self):
-        return "%s:%d" % (os.path.basename(self.path), self.line)
+    def where(self, full=False):
+        """``file:line``; ``full`` names the file by its absolute path."""
+        path = os.path.abspath if full else os.path.basename
+        return "%s:%d" % (path(self.path), self.line)
 
     def __repr__(self):
         return "<%s %s %d nodes>" % (self.kind, self.name, len(self.nodes))
@@ -207,8 +209,10 @@ class SModel(object):
                 return self.params[key]
         return None
 
-    def where(self):
-        return "%s:%d" % (os.path.basename(self.path), self.line)
+    def where(self, full=False):
+        """``file:line``; ``full`` names the file by its absolute path."""
+        path = os.path.abspath if full else os.path.basename
+        return "%s:%d" % (path(self.path), self.line)
 
     def __repr__(self):
         return "<SModel %s %s>" % (self.name, self.file())
@@ -223,6 +227,7 @@ class Deck(object):
         self.unparsed = []         # (path, line, text, reason)
         self.files = []
         self.missing_includes = []
+        self.missing_include_refs = []  # {"include", "from", "line"} each
         self.searched_dirs = []
         self.opaque_files = []     # read for .subckt interfaces only
         self.skipped_files = []    # not read at all
@@ -453,6 +458,9 @@ def read(paths, follow_includes=True, search_dirs=(), fold_case=True,
             continue
         if not os.path.isfile(path):
             deck.missing_includes.append(path)
+            deck.missing_include_refs.append(
+                {"include": os.path.abspath(path), "from": None,
+                 "line": None})
             continue
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             text = fh.read()
@@ -504,6 +512,9 @@ def read(paths, follow_includes=True, search_dirs=(), fold_case=True,
                         deck.missing_includes.append(
                             "%s (from %s:%d)" % (raw, os.path.basename(path),
                                                  lineno))
+                        deck.missing_include_refs.append(
+                            {"include": raw,
+                             "from": os.path.abspath(path), "line": lineno})
                     elif follow_includes and not at_limit:
                         queue.append((target, sub_section, depth + 1))
                 continue
@@ -518,7 +529,8 @@ def read(paths, follow_includes=True, search_dirs=(), fold_case=True,
             m = _DOT_CONNECT.match(line)
             if m:
                 deck.connects.append((norm(m.group(1)), norm(m.group(2)),
-                                      "%s:%d" % (path, lineno)))
+                                      "%s:%d" % (os.path.abspath(path),
+                                                 lineno)))
                 continue
             m = _DOT_MODEL.match(line)
             if m and m.group(2).strip().lower() == "s":

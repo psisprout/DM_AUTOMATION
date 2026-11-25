@@ -1,8 +1,8 @@
 # =====================================================================
 # primesim-dm tools for the in-house MCP.py
 #
-# Paste everything below into MCP.py, and copy mcp/script/dm_deck.py into
-# the script/ folder next to it.  It uses what MCP.py already defines:
+# Paste everything below into MCP.py, and copy mcp/scripts/dm_deck.py into
+# the scripts/ folder next to it.  It uses what MCP.py already defines:
 #   mcp, require_user_path, run_script, OUTPUT_PATH_DESC, OVERWRITE_DESC
 # and needs these imports there (add the ones MCP.py does not have yet):
 #   from pathlib import Path

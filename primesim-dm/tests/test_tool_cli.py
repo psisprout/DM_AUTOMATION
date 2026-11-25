@@ -34,24 +34,30 @@ class TestScript(unittest.TestCase):
         shutil.rmtree(self.dir)
 
     def call(self, *argv):
-        saved, sys.stdout = sys.stdout, io.StringIO()
+        saved = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
         try:
-            code = tool_cli.main(list(argv))
-            out = sys.stdout.getvalue()
+            code = tool_cli.main(list(argv) + ["--json"])
+            out, err = sys.stdout.getvalue(), sys.stderr.getvalue()
         finally:
-            sys.stdout = saved
-        return code, json.loads(out)
+            sys.stdout, sys.stderr = saved
+        self.assertIn("[dm_deck]", err)            # progress goes to stderr
+        lines = out.splitlines()
+        self.assertTrue(lines[-1].startswith("{"))  # the JSON is the last line
+        return code, json.loads(lines[-1])
 
     def test_question(self):
-        code, r = self.call("si-fanout", "--deck", self.deck, "--json")
+        code, r = self.call("si-fanout", "--deck", self.deck)
         self.assertEqual(code, 0)
         self.assertEqual(r["status"], "ok")
         self.assertIn("summary", r)
         self.assertEqual(r["too_many"], 1)
+        where = r["nets"][0]["where"]
+        self.assertTrue(os.path.isabs(where.rsplit(":", 1)[0]), where)
 
     def test_needs_user(self):
         code, r = self.call("summary", "--deck", "top.sp")
-        self.assertEqual((code, r["status"]), (1, "error"))
+        self.assertEqual((code, r["status"]), (2, "error"))
         self.assertTrue(r["message"].startswith(tool_cli.NEED_USER))
         code, r = self.call("net", "--deck", self.deck)
         self.assertTrue(r["message"].startswith(tool_cli.NEED_USER))
@@ -66,7 +72,7 @@ class TestScript(unittest.TestCase):
         self.assertTrue(r["preview"][0].startswith("Cterm_1"))
         code, r = self.call("terminate", "--deck", self.deck,
                             "--output", out)
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 2)
         self.assertIn("이미 있습니다", r["message"])
         code, r = self.call("terminate", "--deck", self.deck,
                             "--output", out, "--overwrite")
@@ -77,11 +83,43 @@ class TestScript(unittest.TestCase):
     def test_graph_wants_html(self):
         code, r = self.call("graph", "--deck", self.deck,
                             "--output", os.path.join(self.dir, "g.svg"))
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 2)
         code, r = self.call("graph", "--deck", self.deck,
                             "--output", os.path.join(self.dir, "g.html"))
         self.assertEqual(code, 0)
         self.assertTrue(os.path.isfile(r["output"]))
+
+
+    def test_paths_in_result_are_absolute(self):
+        with open(self.deck, "a") as fh:
+            fh.write(".include 'gone.inc'\n")
+        tools._CACHE.clear()
+        code, r = self.call("findings", "--deck", self.deck,
+                            "--code", "floating-net")
+        self.assertTrue(all(os.path.isabs(f["where"].rsplit(":", 1)[0])
+                            for f in r["findings"]))
+        code, r = self.call("summary", "--deck", self.deck)
+        self.assertEqual(r["missing_includes"],
+                         [{"include": "gone.inc", "from": self.deck,
+                           "line": 7}])
+
+    def test_timeout_still_answers(self):
+        if not hasattr(tool_cli.signal, "SIGALRM"):
+            self.skipTest("no SIGALRM here")
+        real = tool_cli.run
+
+        def slow(args):
+            import time
+            time.sleep(3)
+            return real(args)
+        tool_cli.run = slow
+        try:
+            code, r = self.call("summary", "--deck", self.deck,
+                                "--timeout", "1")
+        finally:
+            tool_cli.run = real
+        self.assertEqual(code, 2)
+        self.assertIn("1초", r["message"])
 
 
 if __name__ == "__main__":

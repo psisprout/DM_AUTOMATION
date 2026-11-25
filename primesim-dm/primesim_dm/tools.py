@@ -84,8 +84,12 @@ def _keep(opts, keep_net):
 
 
 def _incomplete(dk):
-    """Includes that could not be read, each as "raw (from file:line)"."""
-    return list(dk.missing_includes)
+    """Includes that could not be read: what was named, and where (absolute).
+
+    ``include`` is the name as the deck wrote it, since it was never found;
+    ``from`` is the absolute path of the file that named it.
+    """
+    return [dict(ref) for ref in dk.missing_include_refs]
 
 
 def _finding(f):
@@ -103,7 +107,8 @@ def _cut(items, limit):
 def deck_summary(deck_path, opts, si=False):
     """What was read, and how many findings of each kind lint has."""
     dk = load(deck_path, opts)
-    checker = check_mod.Checker(dk, keep_nets=opts.keep_nets, si=si)
+    checker = check_mod.Checker(dk, keep_nets=opts.keep_nets, si=si,
+                                full_paths=True)
     findings = checker.run()
     counts = checker.counts()
     return {
@@ -129,7 +134,8 @@ def lint_findings(deck_path, opts, code=None, severity=None, si=False,
                   limit=50):
     """lint's findings, optionally narrowed to one code or severity."""
     dk = load(deck_path, opts)
-    checker = check_mod.Checker(dk, keep_nets=opts.keep_nets, si=si)
+    checker = check_mod.Checker(dk, keep_nets=opts.keep_nets, si=si,
+                                full_paths=True)
     found = [_finding(f) for f in checker.run()
              if (not code or f.code == code)
              and (not severity or f.severity == severity)]
@@ -156,7 +162,7 @@ def check_si_fanout(deck_path, opts, expect=2, keep_net=None,
             continue
         rows.append({"net": net, "count": len(els),
                      "elements": [el.name for el in els],
-                     "where": els[0].where()})
+                     "where": els[0].where(full=True)})
     shown, more = _cut(rows, limit)
     return {"deck": deck_path, "expect": expect, "total": len(rows),
             "too_few": sum(1 for r in rows if r["count"] < expect),
@@ -168,12 +174,13 @@ def check_si_fanout(deck_path, opts, expect=2, keep_net=None,
 def find_floating_nets(deck_path, opts, keep_net=None, limit=50):
     """Nets exactly one element touches."""
     dk = load(deck_path, opts)
-    checker = check_mod.Checker(dk, keep_nets=_keep(opts, keep_net))
+    checker = check_mod.Checker(dk, keep_nets=_keep(opts, keep_net),
+                                full_paths=True)
     rows = []
     for net, el, idx in checker.floating_nets():
         rows.append({"net": net, "element": el.name,
                      "ports": check_mod.ports_of(dk.net_users[net], el),
-                     "where": el.where()})
+                     "where": el.where(full=True)})
     shown, more = _cut(rows, limit)
     return {"deck": deck_path, "total": len(rows), "nets": shown,
             "not_shown": more,
@@ -196,7 +203,7 @@ def net_info(deck_path, opts, net):
         rows.append({"element": el.name, "kind": el.kind,
                      "subckt": el.subckt if el.kind == "X" else None,
                      "ports": check_mod.ports_of(users, el),
-                     "where": el.where()})
+                     "where": el.where(full=True)})
     return {"deck": deck_path, "net": key, "element_count": len(rows),
             "is_ground_or_global": key in ("0", "gnd") or key in dk.globals,
             "elements": rows}
@@ -219,7 +226,7 @@ def instance_info(deck_path, opts, name):
                       "elements_on_net": check_mod.touching(users)})
     return {"deck": deck_path, "element": el.name, "kind": el.kind,
             "subckt": el.subckt if el.kind == "X" else None,
-            "where": el.where(), "ports": ports}
+            "where": el.where(full=True), "ports": ports}
 
 
 def make_termination(deck_path, opts, kind="rload", value="1T", value2="1f",
@@ -233,7 +240,8 @@ def make_termination(deck_path, opts, kind="rload", value="1T", value2="1f",
             "%d include(s) could not be read, so nets that belong to them "
             "look one-sided; fix the includes before terminating anything"
             % len(dk.missing_includes))
-    checker = check_mod.Checker(dk, keep_nets=_keep(opts, keep_net))
+    checker = check_mod.Checker(dk, keep_nets=_keep(opts, keep_net),
+                                full_paths=True)
     floating = checker.floating_nets()
     if exclude:
         drop = [re.compile(p) for p in exclude]

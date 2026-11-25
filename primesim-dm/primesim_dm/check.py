@@ -145,8 +145,10 @@ GROUND_NAMES = ("0", "gnd", "gnd!", "vss", "0.0")
 class Checker(object):
     def __init__(self, deck, short_ohms=1e-6, ground_names=None,
                  keep_nets=(), force_connectivity=False,
-                 si=False, si_expect=2, si_ignore_passives=False):
+                 si=False, si_expect=2, si_ignore_passives=False,
+                 full_paths=False):
         self.deck = deck
+        self.full_paths = full_paths
         self.si = si
         self.si_expect = si_expect
         self.si_ignore = PASSIVE_KINDS if si_ignore_passives else ()
@@ -159,6 +161,16 @@ class Checker(object):
 
     def add(self, sev, code, msg, where=""):
         self.findings.append(Finding(sev, code, msg, where))
+
+    def at(self, thing):
+        """Where an element or model is, as findings should name it."""
+        return thing.where(full=self.full_paths)
+
+    def loc(self, path, line):
+        """``file:line`` for a bare path and line, named the same way."""
+        name = os.path.abspath(path) if self.full_paths else \
+            os.path.basename(path)
+        return "%s:%d" % (name, line)
 
     # -- individual checks ----------------------------------------------
     @property
@@ -196,7 +208,7 @@ class Checker(object):
         for path, line, text, reason in self.deck.unparsed[:20]:
             self.add(SEV_INFO, "unparsed-line", "%s (%s)"
                      % (text[:90], reason),
-                     "%s:%d" % (os.path.basename(path), line))
+                     self.loc(path, line))
 
     def check_reference_files(self):
         """Is the deck using the pattern and option files it should be?"""
@@ -249,7 +261,7 @@ class Checker(object):
                  % (len(self.deck.off_profile), self.deck.profile, named))
         for path, line, text, _kind in self.deck.off_profile[:20]:
             self.add(SEV_INFO, "off-profile-element", text[:90],
-                     "%s:%d" % (os.path.basename(path), line))
+                     self.loc(path, line))
 
     def sparam_file(self, el):
         """``(raw path, where it was named)`` for an S element, or (None, '').
@@ -260,14 +272,14 @@ class Checker(object):
         """
         raw = el.model_file()
         if raw:
-            return raw, el.where()
+            return raw, self.at(el)
         name = el.model_name()
         if not name:
             return None, ""
         model = self.deck.s_models.get(name.lower())
         if model is None:
             return None, ""
-        return model.file(), model.where()
+        return model.file(), self.at(model)
 
     def check_model_files(self):
         """The .ibs and Touchstone files the deck names, on disk.
@@ -282,7 +294,7 @@ class Checker(object):
                 raw, where = self.sparam_file(el)
                 what = "S-parameter file"
             else:
-                raw, where = el.model_file(), el.where()
+                raw, where = el.model_file(), self.at(el)
                 what = "IBIS file" if el.kind == "B" else "model file"
             if not raw:
                 continue
@@ -290,7 +302,7 @@ class Checker(object):
                 self.add(SEV_ERROR, "missing-model-file",
                          "%s names %s %s, which is not on any of the "
                          "directories searched. Add --search-dir, or fix the "
-                         "path." % (el.name, what, raw), where or el.where())
+                         "path." % (el.name, what, raw), where or self.at(el))
 
     def check_sparam_ports(self):
         """An S element's node count against its Touchstone port count.
@@ -317,7 +329,7 @@ class Checker(object):
                      "%s has %d node(s) but %s is a %d-port file; it takes "
                      "%d node(s), or %d with a reference node"
                      % (el.name, got, os.path.basename(raw), ports,
-                        ports, ports + 1), where or el.where())
+                        ports, ports + 1), where or self.at(el))
 
     def check_ibis(self):
         """An IBIS buffer that does not say which buffer it is."""
@@ -335,7 +347,7 @@ class Checker(object):
                 self.add(SEV_WARN, "ibis-incomplete",
                          "%s is an IBIS buffer with no %s, so which buffer it "
                          "is cannot be told from the deck"
-                         % (el.name, " and no ".join(missing)), el.where())
+                         % (el.name, " and no ".join(missing)), self.at(el))
 
     def check_si_nodes(self):
         """An SI node joins exactly two things - one driver, one receiver.
@@ -365,7 +377,7 @@ class Checker(object):
                      "net %s joins %d element(s) (%s); an SI node should "
                      "join exactly %d"
                      % (net, len(els), names, self.si_expect),
-                     els[0].where())
+                     self.at(els[0]))
 
     def check_duplicate_names(self):
         seen = {}
@@ -374,7 +386,7 @@ class Checker(object):
             if key in seen:
                 self.add(SEV_ERROR, "duplicate-name",
                          "element %s is defined twice (first at %s)"
-                         % (el.name, seen[key].where()), el.where())
+                         % (el.name, self.at(seen[key])), self.at(el))
             else:
                 seen[key] = el
 
@@ -385,20 +397,20 @@ class Checker(object):
             name = el.subckt
             if not name:
                 self.add(SEV_ERROR, "no-subckt",
-                         "%s has no subckt name" % el.name, el.where())
+                         "%s has no subckt name" % el.name, self.at(el))
                 continue
             sub = self.deck.subckts.get(name.lower())
             if sub is None:
                 self.add(SEV_ERROR, "undefined-subckt",
                          "%s calls subckt %r, which is not defined in any "
-                         "file read" % (el.name, name), el.where())
+                         "file read" % (el.name, name), self.at(el))
                 continue
             if len(el.nodes) != len(sub.ports):
                 self.add(SEV_ERROR, "port-count",
                          "%s passes %d node(s) to subckt %s, which declares "
                          "%d port(s)"
                          % (el.name, len(el.nodes), sub.name, len(sub.ports)),
-                         el.where())
+                         self.at(el))
 
     def check_merged_nets(self):
         """Find pairs of named nets that are electrically the same node."""
@@ -413,7 +425,7 @@ class Checker(object):
             self.merged.append((el.nodes[0], el.nodes[1],
                                 "%s = %s ohm" % (el.name,
                                                  el.tail[0] if el.tail else "?"),
-                                el.where()))
+                                self.at(el)))
         for a, b, why, where in self.merged:
             if a in self.ground or b in self.ground:
                 continue
@@ -446,7 +458,7 @@ class Checker(object):
                 where = "%s (port %d)" % (el.name, idx)
             self.add(SEV_WARN, "floating-net",
                      "net %s is touched only by %s" % (net, where),
-                     el.where())
+                     self.at(el))
 
     def check_unconnected_instances(self):
         """An X instance every one of whose nodes is otherwise unused."""
@@ -459,7 +471,7 @@ class Checker(object):
             if len(lonely) == len(el.nodes):
                 self.add(SEV_ERROR, "isolated-instance",
                          "%s is connected to nothing else in the deck"
-                         % el.name, el.where())
+                         % el.name, self.at(el))
 
     def run(self):
         self.check_includes()

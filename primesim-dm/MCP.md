@@ -6,7 +6,7 @@ primesim-dm 검사 기능을 사내 MCP 서버(codemate / opencode)의 도구로
 | 파일 | 어디에 넣나 | 하는 일 |
 |---|---|---|
 | `mcp/MCP_tools.py` | 사내 `MCP.py` 에 **붙여 넣기** | `@mcp.tool()` 정의 9개. 인자·설명·docstring만 있고, 본문은 `run_script` 호출 |
-| `mcp/script/dm_deck.py` | 사내 `script/` 폴더에 **복사** | 실제 실행. primesim-dm 을 불러 결과를 JSON 으로 출력 |
+| `mcp/scripts/dm_deck.py` | 사내 `scripts/` 폴더에 **복사** | 실제 실행. primesim-dm 을 불러 결과를 JSON 으로 출력 |
 
 - **덱은 절대 고치지 않습니다.** 파일을 쓰는 도구는 사용자가 말한 `output_path`에만 쓰고,
   이미 있는 파일은 `overwrite=true`일 때만 덮어씁니다.
@@ -21,7 +21,7 @@ primesim-dm 검사 기능을 사내 MCP 서버(codemate / opencode)의 도구로
      from typing import Annotated, Any, Optional
      from pydantic import Field
      ```
-2. `mcp/script/dm_deck.py` 를 사내 `script/` 폴더에 복사합니다.
+2. `mcp/scripts/dm_deck.py` 를 사내 `scripts/` 폴더에 복사합니다.
 3. MCP 서버를 띄우는 환경에 `PRIMESIM_DM_HOME` 을 primesim-dm 폴더로 설정합니다.
    ```bash
    export PRIMESIM_DM_HOME=/proj/tools/primesim-dm
@@ -48,33 +48,40 @@ primesim-dm 검사 기능을 사내 MCP 서버(codemate / opencode)의 도구로
 | `dm_make_termination` | 종단 .inc 만들어 줘 (R/C, 값) | `terminate -o term.inc` |
 | `dm_render_graph` | 그림 파일 만들어 줘 (`.html`) | `graph -o graph.html` |
 
-## 3. 스크립트 단독 실행 (확인용)
+## 3. 스크립트 규약 지키는 방식
 
-MCP 없이 스크립트만 돌려 볼 수 있습니다. 출력은 항상 JSON 하나입니다.
+| 규약 | dm_deck.py |
+|---|---|
+| 위치 `scripts/`, `.py` | `mcp/scripts/dm_deck.py` → 사내 `scripts/` 로 복사 |
+| 입력은 argparse 옵션만 | 모든 값이 옵션. `input()` 없음 |
+| `--json` 이면 마지막 줄에 JSON 한 줄 | `{"status": "ok", "summary": ..., ...}` 또는 `{"status": "error", "message": ...}` |
+| 진행·디버그 메시지는 stderr | `[dm_deck] ...` 로 stderr 에만 |
+| 종료 코드 성공 0, 실패 0 아닌 값 | 성공 0, 실패 2 (예상 못 한 오류도 JSON 으로 답하고 2) |
+| 결과의 경로는 절대경로 | `deck`, `output`, `where`("절대경로:줄"), `missing_includes[].from` 모두 절대경로. 상대경로 입력은 거부 |
+| 덮어쓰기는 `--overwrite` 있을 때만 | 파일이 있으면 `[사용자 확인 필요] 파일이 이미 있습니다` 로 실패 |
+| 실행 시간 60초 이내 | `--timeout` 기본 55초. 넘으면 중단하고 JSON 오류로 답함 |
+| 자기 리소스는 `Path(__file__).parent` 기준 | primesim-dm 패키지를 `PRIMESIM_DM_HOME` 또는 `Path(__file__)` 위 폴더에서 찾음. 작업 폴더(cwd)는 쓰지 않음 |
+
+단독으로 돌려 볼 수도 있습니다.
 
 ```bash
-python3 script/dm_deck.py si-fanout --deck /proj/sim/lpddr_write.sp --json
-python3 script/dm_deck.py terminate --deck /proj/sim/lpddr_write.sp --output /proj/sim/term.inc --kind cload --value2 5f
+python3 scripts/dm_deck.py si-fanout --deck /proj/sim/lpddr_write.sp --json
+python3 scripts/dm_deck.py terminate --deck /proj/sim/lpddr_write.sp --output /proj/sim/term.inc --kind cload --value2 5f --json
 ```
 
-| 명령 | 도구 |
+| 명령 | 하는 일 |
 |---|---|
 | `summary` / `si-fanout` / `floating` / `findings` | 검사 |
 | `net --net X` / `instance --name X` | 노드·인스턴스 하나 보기 |
-| `lint-report` / `terminate` / `graph` | `--output` 에 파일 저장 (`--overwrite` 없으면 기존 파일 보호) |
+| `lint-report` / `terminate` / `graph` | `--output` 에 파일 저장 |
 
-- 성공: `{"status": "ok", "summary": "...", ...}`, 종료 코드 0
-- 실패: `{"status": "error", "message": "..."}`, 종료 코드 1.
-  사용자에게 물어봐야 하는 경우(경로 없음, 파일 이미 있음 등)는 메시지가 `[사용자 확인 필요]` 로 시작합니다.
-
-> `run_script` 가 스크립트 실패를 어떻게 받는지(종료 코드인지, `status` 필드인지)는 사내 구현을 보지 못했습니다.
-> 둘 다 맞춰 두었으니, 실패 메시지가 에이전트에게 안 보이면 `run_script` 쪽 처리 방식을 알려 주세요.
+> 덱이 아주 커서 55초를 넘기면 `--skip` / `--opaque` 로 PDK·모델 안쪽을 읽지 않게 하세요 (`DM_SITE_ARGS`).
 
 ## 4. 구조
 
 ```
 mcp/MCP_tools.py            사내 MCP.py 에 붙일 @mcp.tool() 정의
-mcp/script/dm_deck.py       사내 script/ 에 복사할 실행 스크립트 (PRIMESIM_DM_HOME 으로 패키지를 찾음)
+mcp/scripts/dm_deck.py       사내 scripts/ 에 복사할 실행 스크립트 (PRIMESIM_DM_HOME 으로 패키지를 찾음)
 primesim_dm/tool_cli.py     dm_deck.py 의 본체: 명령 해석, JSON 출력, 덮어쓰기 보호
 primesim_dm/tools.py        질문 하나 = 함수 하나. dict 반환, stdlib 만
 tests/test_tools.py, tests/test_tool_cli.py

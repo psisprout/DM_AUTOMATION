@@ -2,31 +2,46 @@
 
 The in-house ``MCP.py`` holds the ``@mcp.tool()`` definitions, and each tool
 body hands its arguments to ``run_script(<script>, args)``, which runs a
-script from the ``script/`` folder.  ``mcp/script/dm_deck.py`` is that
+script from the ``scripts/`` folder.  ``mcp/scripts/dm_deck.py`` is that
 script for primesim-dm; it calls :func:`main` here, so the logic stays in the
 package and under its tests.
 
     dm_deck.py <command> --deck /abs/top.sp [--output /abs/out] [--overwrite]
                [--json] [site options] [command options]
 
-Prints one JSON object on stdout: ``status`` "ok" with a one-line
-``summary`` and the answer, or ``status`` "error" with a ``message`` (exit 1).
-A message the user has to answer starts with "[사용자 확인 필요]".  The deck
-is never written; ``--output`` is written only if it does not exist yet or
-``--overwrite`` is given.  Stdlib only, like the rest of the package.
+Follows the in-house script rules:
+
+* every value comes in as an option; nothing is ever asked for interactively
+* with ``--json`` the last line of stdout is the result as one line of JSON:
+  ``status`` "ok" with a one-line ``summary`` and the answer, or ``status``
+  "error" with a ``message``; without it, the same result is printed for
+  a person to read
+* progress and debug messages go to stderr
+* exit 0 on success, 2 on failure
+* every path in the result is absolute, and a relative user path is refused
+* ``--output`` is written only if it does not exist yet or ``--overwrite``
+  is given; the deck itself is never written
+* a run is cut off after ``--timeout`` seconds (default 55, inside the 60 the
+  caller allows) and reports that instead of being killed silently
+
+A message the user has to answer starts with "[사용자 확인 필요]".  Stdlib
+only, like the rest of the package.
 """
 
 import argparse
 import io
 import json
 import os
+import signal
 import sys
+import time
 
 from . import cli as cli_mod
 from . import deck as deck_mod
 from . import tools
 
 NEED_USER = "[사용자 확인 필요]"
+FAIL = 2
 
 COMMANDS = ("summary", "si-fanout", "floating", "findings", "net",
             "instance", "lint-report", "terminate", "graph")
@@ -39,8 +54,9 @@ def build_parser():
     p.add_argument("--output", help="absolute path to write (file commands)")
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--json", action="store_true",
-                   help="accepted for the in-house convention; output is "
-                        "always JSON")
+                   help="print the result as one line of JSON, last on stdout")
+    p.add_argument("--timeout", type=int, default=55, metavar="SEC",
+                   help="give up after SEC seconds (default 55)")
     # site options: where the models live, which trees to keep out
     p.add_argument("--search-dir", action="append", default=[])
     p.add_argument("--opaque", action="append", default=[], metavar="REGEX")
@@ -186,13 +202,57 @@ def run(args):
     raise Refused("unknown command %s" % cmd)
 
 
+def _log(msg):
+    print("[dm_deck] %s" % msg, file=sys.stderr)
+
+
+class TimedOut(Exception):
+    pass
+
+
+def _on_alarm(signum, frame):
+    raise TimedOut()
+
+
+def _print(result, as_json):
+    if as_json:
+        # one line, and the last one: the caller reads it from there
+        print(json.dumps(result, ensure_ascii=False))
+        return
+    print(result.get("summary") or result.get("message", ""))
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    timer = hasattr(signal, "SIGALRM") and args.timeout > 0
+    if timer:
+        signal.signal(signal.SIGALRM, _on_alarm)
+        signal.alarm(args.timeout)
+    started = time.time()
+    _log("%s %s" % (args.command, args.deck))
     try:
         result = run(args)
         code = 0
     except (Refused, tools.DeckError) as exc:
         result = {"status": "error", "message": str(exc)}
-        code = 1
-    sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+        code = FAIL
+    except TimedOut:
+        result = {"status": "error",
+                  "message": "%d초 안에 끝나지 않아 중단했습니다. --skip / "
+                             "--opaque 로 읽는 범위를 줄여 보세요."
+                             % args.timeout}
+        code = FAIL
+    except Exception as exc:            # a bug: still answer in JSON
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        result = {"status": "error",
+                  "message": "내부 오류: %s: %s" % (type(exc).__name__, exc)}
+        code = FAIL
+    finally:
+        if timer:
+            signal.alarm(0)
+    _log("%s in %.1fs" % ("done" if code == 0 else "failed",
+                           time.time() - started))
+    _print(result, args.json)
     return code
