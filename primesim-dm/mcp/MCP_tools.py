@@ -2,9 +2,9 @@
 # primesim-dm tools for the in-house MCP.py
 #
 # Paste everything below into MCP.py.  Each tool runs its own script,
-# scripts/dm_<tool>.py; copy mcp/scripts/*.py and the primesim_dm/ package
-# folder into the scripts/ folder next to MCP.py.  It uses what MCP.py
-# already defines:
+# scripts/dm_<tool>.py; put them in the scripts/ folder next to MCP.py with
+#   python3 /proj/tools/primesim-dm/mcp/deploy.py <MCP.py folder>/scripts
+# It uses what MCP.py already defines:
 #   mcp, require_user_path, run_script, OUTPUT_PATH_DESC, OVERWRITE_DESC
 # and needs these imports there (add the ones MCP.py does not have yet):
 #   from pathlib import Path

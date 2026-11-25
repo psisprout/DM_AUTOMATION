@@ -2,22 +2,26 @@
 """Files, elements and nets read, and lint findings counted by kind.
 
 Run by the dm_deck_summary tool in MCP.py; see --help for the options.  The work is
-done by the primesim_dm package, which sits next to this file in scripts/
-(found from Path(__file__).parent, never from the working directory).
+done by the primesim_dm_*.py files next to this file in scripts/ (put there
+by mcp/deploy.py), found from Path(__file__).parent, never from the
+working directory.
 """
 
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-# deployed: scripts/primesim_dm next to this file;
-# in the primesim-dm repo: mcp/scripts/ two levels below the package
-for _root in (HERE, HERE.parent.parent):
-    if (_root / "primesim_dm").is_dir():
-        sys.path.insert(0, str(_root))
-        break
+# no __pycache__/ folder: scripts/ holds files only
+sys.dont_write_bytecode = True
 
-from primesim_dm.tool_cli import main  # noqa: E402
+HERE = Path(__file__).resolve().parent
+if (HERE / "primesim_dm_tool_cli.py").is_file():
+    # deployed: the flat primesim_dm_*.py files sit next to this one
+    sys.path.insert(0, str(HERE))
+    from primesim_dm_tool_cli import main
+else:
+    # in the primesim-dm repo: mcp/scripts/ is two folders below the package
+    sys.path.insert(0, str(HERE.parent.parent))
+    from primesim_dm.tool_cli import main
 
 if __name__ == "__main__":
     sys.exit(main("dm_deck_summary"))
