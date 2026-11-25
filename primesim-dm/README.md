@@ -3,6 +3,7 @@
 이미 있는 PrimeSim 덱을 **읽고 검증하는** CLI. 명령은 세 개뿐입니다.
 
 > 처음 쓰는 거라면 [`GUIDE.md`](GUIDE.md) 부터 보세요 (간단 사용법 + 부록). 브라우저로는 `GUIDE.html` 을 열면 됩니다.
+> AI 툴(opencode 등)에서 MCP 도구로 쓰려면 [`MCP.md`](MCP.md) 를 보세요.
 
 | 명령 | 하는 일 | 출력 |
 |---|---|---|
@@ -27,7 +28,7 @@
 
 ```bash
 cd primesim-dm
-python3 -m unittest discover -s tests     # 220개 테스트, 전부 통과해야 정상
+python3 -m unittest discover -s tests     # 230개 테스트, 전부 통과해야 정상
 python3 -m primesim_dm lint --help
 ```
 
@@ -877,7 +878,9 @@ primesim_dm/
   graph.py       연결성 그림 + HTML 뷰어 (라이브러리 없음, file:// 로 열림)
   references.py  기준 패턴/옵션 파일 경로 ← 여기만 고치면 됩니다
   cli.py         lint / terminate / graph
-tests/           unittest (표준 라이브러리), 220개
+  tools.py       질문 하나 = 함수 하나 (MCP 도구의 본체)
+  mcp_server.py  tools.py 를 MCP 도구로 노출 (Python 3.10+, mcp 패키지)
+tests/           unittest (표준 라이브러리), 230개
 ```
 
 라이브러리로도 쓸 수 있습니다:
