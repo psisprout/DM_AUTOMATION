@@ -28,7 +28,7 @@
 
 ```bash
 cd primesim-dm
-python3 -m unittest discover -s tests     # 235개 테스트, 전부 통과해야 정상
+python3 -m unittest discover -s tests     # 238개 테스트, 전부 통과해야 정상
 python3 -m primesim_dm lint --help
 ```
 
@@ -881,7 +881,7 @@ primesim_dm/
   tools.py       질문 하나 = 함수 하나 (MCP 도구의 본체)
   tool_cli.py    사내 MCP 의 run_script 가 부르는 스크립트 본체 (JSON 출력)
 mcp/             사내 MCP.py 에 붙일 도구 정의와 scripts/ 에 넣을 스크립트 → MCP.md
-tests/           unittest (표준 라이브러리), 235개
+tests/           unittest (표준 라이브러리), 238개
 ```
 
 라이브러리로도 쓸 수 있습니다:

@@ -21,7 +21,7 @@ XC pad_a stub pkg
 
 
 class TestScript(unittest.TestCase):
-    """dm_deck.py's contract: one JSON object out, status ok or error."""
+    """The dm_*.py scripts' contract: JSON last line, status ok or error."""
 
     def setUp(self):
         self.dir = tempfile.mkdtemp()
