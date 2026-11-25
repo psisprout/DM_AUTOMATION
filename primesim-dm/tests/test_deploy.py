@@ -48,13 +48,14 @@ class TestDeployed(unittest.TestCase):
         with open(deck, "w") as fh:
             fh.write(".subckt p a b\n.ends\nXA n1 n2 p\nXB n1 n3 p\n")
         out = subprocess.run(
-            [sys.executable, os.path.join(self.scripts, "dm_net_info.py"),
-             "--deck", deck, "--net", "n1", "--json"],
+            [sys.executable,
+             os.path.join(self.scripts, "dm_check_si_fanout.py"),
+             "--deck", deck, "--json"],
             cwd=self.dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             universal_newlines=True)
         self.assertEqual(out.returncode, 0, out.stderr)
         r = json.loads(out.stdout.splitlines()[-1])
-        self.assertEqual(r["element_count"], 2)
+        self.assertEqual([n["net"] for n in r["nets"]], ["n2", "n3"])
         dirs = [d for d in os.listdir(self.scripts)
                 if os.path.isdir(os.path.join(self.scripts, d))]
         self.assertEqual(dirs, [])

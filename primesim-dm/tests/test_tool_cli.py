@@ -58,10 +58,10 @@ class TestScript(unittest.TestCase):
         self.assertTrue(os.path.isabs(where.rsplit(":", 1)[0]), where)
 
     def test_needs_user(self):
-        code, r = self.call("summary", "--deck", "top.sp")
+        code, r = self.call("errors", "--deck", "top.sp")
         self.assertEqual((code, r["status"]), (2, "error"))
         self.assertTrue(r["message"].startswith(tool_cli.NEED_USER))
-        code, r = self.call("net", "--deck", self.deck)
+        code, r = self.call("terminate", "--deck", self.deck)
         self.assertTrue(r["message"].startswith(tool_cli.NEED_USER))
 
     def test_output_only_with_overwrite(self):
@@ -71,7 +71,10 @@ class TestScript(unittest.TestCase):
                             "--value2", "5f")
         self.assertEqual(code, 0)
         self.assertEqual(r["count"], 3)
-        self.assertTrue(r["preview"][0].startswith("Cterm_1"))
+        self.assertEqual(sorted(n["net"] for n in r["nets"]),
+                         ["ball_a", "ball_b", "stub"])
+        with open(out) as fh:
+            self.assertIn("Cterm_1", fh.read())
         code, r = self.call("terminate", "--deck", self.deck,
                             "--output", out)
         self.assertEqual(code, 2)
@@ -94,20 +97,22 @@ class TestScript(unittest.TestCase):
 
     def test_paths_in_result_are_absolute(self):
         with open(self.deck, "a") as fh:
-            fh.write(".include 'gone.inc'\n")
+            fh.write(".include 'gone.inc'\nXD pad_a q nosuch\n")
         tools._CACHE.clear()
-        code, r = self.call("findings", "--deck", self.deck,
-                            "--code", "floating-net")
+        code, r = self.call("errors", "--deck", self.deck)
+        self.assertTrue(r["findings"])
         self.assertTrue(all(os.path.isabs(f["where"].rsplit(":", 1)[0])
-                            for f in r["findings"]))
-        code, r = self.call("summary", "--deck", self.deck)
+                            for f in r["findings"] if f["where"]))
         self.assertEqual(r["missing_includes"],
                          [{"include": "gone.inc", "from": self.deck,
                            "line": 7}])
+        self.assertEqual(sorted(tool_cli.SCRIPTS),
+                         ["dm_check_errors", "dm_check_si_fanout",
+                          "dm_make_termination", "dm_render_graph"])
 
     def test_each_script_takes_only_its_own_options(self):
         with self.assertRaises(SystemExit):
-            tool_cli.build_parser("dm_net_info").parse_args(
+            tool_cli.build_parser("dm_check_errors").parse_args(
                 ["--deck", self.deck, "--output", "/tmp/x"])
         args = tool_cli.build_parser("dm_make_termination").parse_args(
             ["--deck", self.deck, "--output", "/tmp/x", "--kind", "cload"])
@@ -124,7 +129,7 @@ class TestScript(unittest.TestCase):
             return real(args)
         tool_cli.run = slow
         try:
-            code, r = self.call("summary", "--deck", self.deck,
+            code, r = self.call("errors", "--deck", self.deck,
                                 "--timeout", "1")
         finally:
             tool_cli.run = real

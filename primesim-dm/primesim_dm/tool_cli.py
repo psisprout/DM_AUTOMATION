@@ -46,33 +46,22 @@ FAIL = 2
 
 # script name -> (command, the options that command takes)
 SCRIPTS = {
-    "dm_deck_summary": ("summary", ("si",)),
     "dm_check_si_fanout": ("si-fanout", ("expect", "ignore_passives",
                                          "limit")),
-    "dm_find_floating_nets": ("floating", ("limit",)),
-    "dm_lint_findings": ("findings", ("code", "severity", "si", "limit")),
-    "dm_net_info": ("net", ("net",)),
-    "dm_instance_info": ("instance", ("name",)),
-    "dm_save_lint_report": ("lint-report", ("output", "si")),
-    "dm_make_termination": ("terminate", ("output", "kind", "value",
-                                          "value2", "exclude")),
+    "dm_check_errors": ("errors", ("limit",)),
     "dm_render_graph": ("graph", ("output",)),
+    "dm_make_termination": ("terminate", ("output", "kind", "value",
+                                          "value2", "exclude", "limit")),
 }
 COMMANDS = tuple(cmd for cmd, _opts in SCRIPTS.values())
 
 _OPTIONS = {
-    "si": (("--si",), dict(action="store_true",
-                           help="also apply the SI rule (2 elements a net)")),
     "expect": (("--expect",), dict(type=int, default=2,
                                    help="elements a signal net should join")),
     "ignore_passives": (("--ignore-passives",), dict(
         action="store_true", help="do not count R/C/L")),
     "limit": (("--limit",), dict(type=int, default=50,
                                  help="most items to list (default 50)")),
-    "code": (("--code",), dict(help="only this finding code")),
-    "severity": (("--severity",), dict(choices=("error", "warn", "info"))),
-    "net": (("--net",), dict(help="net name")),
-    "name": (("--name",), dict(help="instance name")),
     "output": (("--output",), dict(help="absolute path to write")),
     "kind": (("--kind",), dict(choices=("rload", "cload"), default="rload")),
     "value": (("--value",), dict(default="1T", help="resistor value")),
@@ -87,9 +76,8 @@ def build_parser(script):
     """The options one tool's script takes: the common ones and its own."""
     command, own = SCRIPTS[script]
     p = argparse.ArgumentParser(prog=script + ".py")
-    p.set_defaults(command=command, output=None, overwrite=False, si=False,
-                   expect=2, ignore_passives=False, limit=50, code=None,
-                   severity=None, net=None, name=None, kind="rload",
+    p.set_defaults(command=command, output=None, overwrite=False,
+                   expect=2, ignore_passives=False, limit=50, kind="rload",
                    value="1T", value2="1f", exclude=[])
     p.add_argument("--deck", required=True, help="absolute path of the deck")
     p.add_argument("--json", action="store_true",
@@ -153,11 +141,6 @@ def run(args):
     name = os.path.basename(deck)
     cmd = args.command
 
-    if cmd == "summary":
-        r = tools.deck_summary(deck, opts, si=args.si)
-        return _ok("%s: 소자 %d개, 노드 %d개, error %d / warn %d"
-                   % (name, r["elements"], r["nets"], r["errors"],
-                      r["warnings"]), r)
     if cmd == "si-fanout":
         r = tools.check_si_fanout(deck, opts, expect=args.expect,
                                   ignore_passives=args.ignore_passives,
@@ -165,47 +148,20 @@ def run(args):
         return _ok("소자 수가 %d개가 아닌 노드 %d개 (부족 %d, 초과 %d)"
                    % (args.expect, r["total"], r["too_few"], r["too_many"]),
                    r)
-    if cmd == "floating":
-        r = tools.find_floating_nets(deck, opts, limit=args.limit)
-        return _ok("한쪽만 연결된 노드 %d개" % r["total"], r)
-    if cmd == "findings":
-        r = tools.lint_findings(deck, opts, code=args.code,
-                                severity=args.severity, si=args.si,
-                                limit=args.limit)
-        return _ok("조건에 맞는 문제 %d개" % r["total"], r)
-    if cmd == "net":
-        if not args.net:
-            raise Refused("%s 볼 노드 이름(net)이 없습니다. 사용자에게 "
-                          "물어보세요." % NEED_USER)
-        r = tools.net_info(deck, opts, args.net)
-        return _ok("노드 %s 에 소자 %d개" % (r["net"], r["element_count"]), r)
-    if cmd == "instance":
-        if not args.name:
-            raise Refused("%s 볼 인스턴스 이름(name)이 없습니다. 사용자에게 "
-                          "물어보세요." % NEED_USER)
-        r = tools.instance_info(deck, opts, args.name)
-        return _ok("%s (%s), 포트 %d개" % (r["element"],
-                                          r["subckt"] or r["kind"],
-                                          len(r["ports"])), r)
+    if cmd == "errors":
+        r = tools.check_errors(deck, opts, limit=args.limit)
+        return _ok("%s: error %d / warn %d, 못 읽은 include %d개"
+                   % (name, r["errors"], r["warnings"],
+                      len(r["missing_includes"])), r)
 
     # the commands below write --output
-    if cmd == "lint-report":
-        out = _check_output(args.output, args.overwrite)
-        r = tools.lint_report(deck, opts, si=args.si)
-        tools.write_output(out, r.pop("text"), overwrite=True)
-        r["output"] = out
-        return _ok("lint 리포트 저장: error %d / warn %d"
-                   % (r["errors"], r["warnings"]), r)
     if cmd == "terminate":
         out = _check_output(args.output, args.overwrite)
         r = tools.make_termination(deck, opts, kind=args.kind,
                                    value=args.value, value2=args.value2,
-                                   exclude=args.exclude)
-        text = r.pop("text")
-        tools.write_output(out, text, overwrite=True)
+                                   exclude=args.exclude, limit=args.limit)
+        tools.write_output(out, r.pop("text"), overwrite=True)
         r["output"] = out
-        r["preview"] = [ln for ln in text.splitlines()
-                        if ln and not ln.startswith("*")][:10]
         return _ok("종단 %d개를 %s 에 저장" % (r["count"], out), r)
     if cmd == "graph":
         out = _check_output(args.output, args.overwrite, suffix=".html")
@@ -256,7 +212,7 @@ def _print(result, as_json):
 
 
 def main(script, argv=None):
-    """Run one tool's script: ``main("dm_net_info")`` from dm_net_info.py."""
+    """Run one tool's script: ``main("dm_check_errors")`` from its .py."""
     args = build_parser(script).parse_args(argv)
     timer = hasattr(signal, "SIGALRM") and args.timeout > 0
     if timer:

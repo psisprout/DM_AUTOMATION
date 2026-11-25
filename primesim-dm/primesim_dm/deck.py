@@ -569,6 +569,9 @@ def read(paths, follow_includes=True, search_dirs=(), fold_case=True,
         deck.unused_filters.append(("--skip", pattern))
     if opaque is not None:
         for pattern in opaque_f.unused():
-            deck.unused_filters.append(("--opaque", pattern))
+            # the built-in .spf/.dspf/... patterns are there for decks that
+            # have such files; one that has none has nothing to fix
+            if pattern not in DEFAULT_OPAQUE:
+                deck.unused_filters.append(("--opaque", pattern))
     deck.index_nets()
     return deck

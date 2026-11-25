@@ -1,13 +1,12 @@
-"""Small, question-sized checks over a deck, for an MCP server to expose.
+"""The checks behind the MCP tools, one function per tool.
 
-``lint`` answers everything in one report; an assistant asks one thing at a
-time ("which nets have three things on them?", "what touches txp?") and does
-better with a short structured answer to each.  Every function here takes a
-deck path and returns plain dicts and lists, so it can be tested without any
-MCP package and serialised as JSON as it stands.
+Four jobs: the SI fan-out rule, the other lint errors, the terminations
+(the picture is the CLI's graph command).  Every function takes a deck path
+and returns plain dicts and lists, so it is tested without any MCP package
+and serialised as JSON as it stands; :mod:`primesim_dm.tool_cli` turns them
+into the scripts the in-house MCP tools run.
 
-Stdlib only, like the rest of the package; the MCP layer lives in
-:mod:`primesim_dm.mcp_server`.
+Stdlib only, like the rest of the package.
 """
 
 import os
@@ -104,44 +103,14 @@ def _cut(items, limit):
 
 
 # ------------------------------------------------------------------ tools
-def deck_summary(deck_path, opts, si=False):
-    """What was read, and how many findings of each kind lint has."""
-    dk = load(deck_path, opts)
-    checker = check_mod.Checker(dk, keep_nets=opts.keep_nets, si=si,
-                                full_paths=True)
-    findings = checker.run()
-    counts = checker.counts()
-    return {
-        "deck": deck_path,
-        "files_read": len(dk.files),
-        "elements": len(dk.elements),
-        "nets": len(dk.net_users),
-        "subckt_definitions": len(dk.subckts),
-        "unparsed_lines": len(dk.unparsed),
-        "off_profile_lines": len(dk.off_profile),
-        "skipped_files": len(dk.skipped_files),
-        "opaque_files": len(dk.opaque_files),
-        "missing_includes": _incomplete(dk),
-        "errors": counts[check_mod.SEV_ERROR],
-        "warnings": counts[check_mod.SEV_WARN],
-        "notes": counts[check_mod.SEV_INFO],
-        "by_kind": [{"severity": sev, "code": code, "count": n}
-                    for sev, code, n in check_mod.summarize(findings)],
-    }
+# Kept to the four jobs an assistant is asked for - the SI fan-out rule,
+# everything else lint finds, the picture, the terminations - so it does
+# not wander through a dozen small calls to answer one question.
 
-
-def lint_findings(deck_path, opts, code=None, severity=None, si=False,
-                  limit=50):
-    """lint's findings, optionally narrowed to one code or severity."""
-    dk = load(deck_path, opts)
-    checker = check_mod.Checker(dk, keep_nets=opts.keep_nets, si=si,
-                                full_paths=True)
-    found = [_finding(f) for f in checker.run()
-             if (not code or f.code == code)
-             and (not severity or f.severity == severity)]
-    shown, more = _cut(found, limit)
-    return {"deck": deck_path, "total": len(found), "findings": shown,
-            "not_shown": more}
+# what check_errors leaves to the other tools: one-sided nets are what
+# make_termination is for, and a note that two nets are one is not an error
+CONNECTIVITY_CODES = ("floating-net", "checks-skipped", "merged-net",
+                      "si-node-fanout")
 
 
 def check_si_fanout(deck_path, opts, expect=2, keep_net=None,
@@ -171,67 +140,37 @@ def check_si_fanout(deck_path, opts, expect=2, keep_net=None,
             "missing_includes": _incomplete(dk)}
 
 
-def find_floating_nets(deck_path, opts, keep_net=None, limit=50):
-    """Nets exactly one element touches."""
+def check_errors(deck_path, opts, limit=50):
+    """Everything lint finds except connectivity: includes, subckt calls,
+    port counts, duplicate names, model files, lines it could not read."""
     dk = load(deck_path, opts)
-    checker = check_mod.Checker(dk, keep_nets=_keep(opts, keep_net),
+    checker = check_mod.Checker(dk, keep_nets=opts.keep_nets,
                                 full_paths=True)
-    rows = []
-    for net, el, idx in checker.floating_nets():
-        rows.append({"net": net, "element": el.name,
-                     "ports": check_mod.ports_of(dk.net_users[net], el),
-                     "where": el.where(full=True)})
-    shown, more = _cut(rows, limit)
-    return {"deck": deck_path, "total": len(rows), "nets": shown,
-            "not_shown": more,
-            # one unread include makes its nets look one-sided; say so
-            # rather than let the list be taken at face value
-            "missing_includes": _incomplete(dk)}
-
-
-def net_info(deck_path, opts, net):
-    """Everything on one net, with the port each element uses."""
-    dk = load(deck_path, opts)
-    key = net.lower() if net.lower() in dk.net_users else net
-    users = dk.net_users.get(key)
-    if users is None:
-        close = [n for n in dk.net_users if net.lower() in n.lower()][:10]
-        raise DeckError("no net named %s; similar: %s"
-                        % (net, ", ".join(close) or "none"))
-    rows = []
-    for el in check_mod.on_net(users):
-        rows.append({"element": el.name, "kind": el.kind,
-                     "subckt": el.subckt if el.kind == "X" else None,
-                     "ports": check_mod.ports_of(users, el),
-                     "where": el.where(full=True)})
-    return {"deck": deck_path, "net": key, "element_count": len(rows),
-            "is_ground_or_global": key in ("0", "gnd") or key in dk.globals,
-            "elements": rows}
-
-
-def instance_info(deck_path, opts, name):
-    """One element: what it is, and how many others share each of its nets."""
-    dk = load(deck_path, opts)
-    match = [el for el in dk.elements if el.name.lower() == name.lower()]
-    if not match:
-        close = [el.name for el in dk.elements
-                 if name.lower() in el.name.lower()][:10]
-        raise DeckError("no element named %s; similar: %s"
-                        % (name, ", ".join(close) or "none"))
-    el = match[0]
-    ports = []
-    for i, n in enumerate(el.nodes):
-        users = dk.net_users.get(n, [])
-        ports.append({"port": i, "net": n,
-                      "elements_on_net": check_mod.touching(users)})
-    return {"deck": deck_path, "element": el.name, "kind": el.kind,
-            "subckt": el.subckt if el.kind == "X" else None,
-            "where": el.where(full=True), "ports": ports}
+    found = [f for f in checker.run() if f.code not in CONNECTIVITY_CODES]
+    by_kind = check_mod.summarize(found)
+    shown, more = _cut([_finding(f) for f in found], limit)
+    return {
+        "deck": deck_path,
+        "files_read": len(dk.files),
+        "elements": len(dk.elements),
+        "nets": len(dk.net_users),
+        "errors": sum(1 for f in found if f.severity == check_mod.SEV_ERROR),
+        "warnings": sum(1 for f in found if f.severity == check_mod.SEV_WARN),
+        "by_kind": [{"severity": sev, "code": code, "count": n}
+                    for sev, code, n in by_kind],
+        "findings": shown,
+        "not_shown": more,
+        "missing_includes": _incomplete(dk),
+    }
 
 
 def make_termination(deck_path, opts, kind="rload", value="1T", value2="1f",
-                     keep_net=None, exclude=None):
-    """Termination lines for the one-sided nets, as text; nothing written."""
+                     keep_net=None, exclude=None, limit=50):
+    """Termination lines for the one-sided nets, as text; nothing written.
+
+    The nets come back as well, each with the instance and port it hangs
+    off, so the answer can be reviewed without a second call.
+    """
     if kind not in ("rload", "cload"):
         raise DeckError("kind must be rload or cload")
     dk = load(deck_path, opts)
@@ -250,21 +189,12 @@ def make_termination(deck_path, opts, kind="rload", value="1T", value2="1f",
     text = check_mod.render_terminations(
         dk, floating, kind=kind, value=value, value2=value2,
         prefix="Cterm_" if kind == "cload" else "Rterm_", source=deck_path)
-    return {"deck": deck_path, "count": len(floating), "text": text}
-
-
-def lint_report(deck_path, opts, si=False):
-    """The full lint report as the CLI's ``-o`` writes it, with its counts."""
-    dk = load(deck_path, opts)
-    checker = check_mod.Checker(dk, keep_nets=opts.keep_nets, si=si)
-    findings = checker.run()
-    counts = checker.counts()
-    text = check_mod.render(dk, findings, counts, verbose=True, limit=0)
-    return {"deck": deck_path, "text": text,
-            "errors": counts[check_mod.SEV_ERROR],
-            "warnings": counts[check_mod.SEV_WARN],
-            "notes": counts[check_mod.SEV_INFO],
-            "missing_includes": _incomplete(dk)}
+    rows = [{"net": net, "element": el.name,
+             "ports": check_mod.ports_of(dk.net_users[net], el),
+             "where": el.where(full=True)} for net, el, _idx in floating]
+    shown, more = _cut(rows, limit)
+    return {"deck": deck_path, "count": len(floating), "nets": shown,
+            "not_shown": more, "text": text}
 
 
 class OutputExists(DeckError):

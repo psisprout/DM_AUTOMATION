@@ -4,15 +4,16 @@
     python3 mcp/deploy.py /path/to/inhouse/scripts [--overwrite]
 
 The in-house scripts/ folder holds files only, no sub-folders, so the
-primesim_dm package cannot go there as a folder.  This copies the nine tool
+primesim_dm package cannot go there as a folder.  This copies the tool
 scripts (mcp/scripts/dm_*.py) and writes each package module next to them
 as a flat file, primesim_dm_<module>.py, with its imports rewritten to
 match: ``from . import deck as deck_mod`` becomes
 ``import primesim_dm_deck as deck_mod``.  The tool scripts find those files
 from Path(__file__).parent.
 
-Existing files are replaced only with --overwrite.  Prints what it wrote.
-Run it again after changing primesim-dm.
+Existing files are replaced only with --overwrite.  Prints what it wrote,
+and names any older dm_*.py there that no tool uses any more (it does not
+delete them).  Run it again after changing primesim-dm.
 """
 
 import argparse
@@ -88,6 +89,13 @@ def main(argv=None):
         if name.startswith("dm_"):
             shutil.copymode(HERE / "scripts" / name, dst)
         print(dst)
+    # tool scripts an earlier deploy left that no tool runs any more
+    names = {name for name, _t in files}
+    stale = sorted(p.name for p in target.glob("dm_*.py")
+                   if p.name not in names)
+    if stale:
+        print("no longer used by any tool, safe to delete: %s"
+              % ", ".join(stale), file=sys.stderr)
     return 0
 
 

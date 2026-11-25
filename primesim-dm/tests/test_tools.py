@@ -43,17 +43,6 @@ class Harness(unittest.TestCase):
 
 
 class TestQuestions(Harness):
-    def test_summary_counts(self):
-        s = tools.deck_summary(self.deck, self.opts)
-        self.assertEqual(s["elements"], 6)
-        self.assertEqual(s["missing_includes"], [])
-        codes = [k["code"] for k in s["by_kind"]]
-        self.assertIn("floating-net", codes)
-        self.assertNotIn("si-node-fanout", codes)
-        self.assertIn("si-node-fanout",
-                      [k["code"] for k in tools.deck_summary(
-                          self.deck, self.opts, si=True)["by_kind"]])
-
     def test_si_fanout_splits_few_and_many(self):
         r = tools.check_si_fanout(self.deck, self.opts)
         by_net = dict((n["net"], n) for n in r["nets"])
@@ -64,34 +53,35 @@ class TestQuestions(Harness):
         self.assertNotIn("vdd", by_net)         # kept out by the server
         self.assertEqual(r["too_many"], 1)
         self.assertEqual(r["too_few"], r["total"] - 1)
+        self.assertTrue(os.path.isabs(by_net["pad_dq0"]["where"]
+                                      .rsplit(":", 1)[0]))
 
     def test_limit_says_how_many_are_left(self):
-        r = tools.find_floating_nets(self.deck, self.opts, limit=2)
+        r = tools.check_si_fanout(self.deck, self.opts, limit=2)
         self.assertEqual(len(r["nets"]), 2)
         self.assertEqual(r["not_shown"], r["total"] - 2)
 
-    def test_net_info_ports_and_case(self):
-        r = tools.net_info(self.deck, self.opts, "PAD_DQ0")
-        self.assertEqual(r["net"], "pad_dq0")
-        self.assertEqual(r["element_count"], 3)
-        self.assertEqual(r["elements"][0]["subckt"], "io")
-        self.assertEqual(r["elements"][0]["ports"], [0])
+    def test_errors_leave_connectivity_out(self):
+        deck = self.write("bad.sp", DECK + "XBAD a b nosuch\n"
+                          "XIO_DQ0 x y z io\n")
+        r = tools.check_errors(deck, self.opts)
+        codes = [k["code"] for k in r["by_kind"]]
+        self.assertIn("undefined-subckt", codes)
+        self.assertIn("duplicate-name", codes)
+        self.assertIn("port-count", codes)
+        for code in tools.CONNECTIVITY_CODES + ("filter-unused",):
+            self.assertNotIn(code, codes)
+        self.assertEqual(r["errors"], sum(k["count"] for k in r["by_kind"]
+                                          if k["severity"] == "error"))
 
-    def test_unknown_names_suggest(self):
-        with self.assertRaises(tools.DeckError) as cm:
-            tools.net_info(self.deck, self.opts, "dq0")
-        self.assertIn("pad_dq0", str(cm.exception))
-        with self.assertRaises(tools.DeckError):
-            tools.instance_info(self.deck, self.opts, "XNOPE")
+    def test_errors_name_missing_includes(self):
+        deck = self.write("broken.sp", ".include 'gone.inc'\n" + DECK)
+        r = tools.check_errors(deck, self.opts)
+        self.assertEqual(r["missing_includes"],
+                         [{"include": "gone.inc", "from": deck, "line": 1}])
+        self.assertIn("missing-include", [k["code"] for k in r["by_kind"]])
 
-    def test_instance_info(self):
-        r = tools.instance_info(self.deck, self.opts, "xstub")
-        self.assertEqual(r["element"], "XSTUB")
-        self.assertEqual([(p["net"], p["elements_on_net"])
-                          for p in r["ports"]],
-                         [("pad_dq0", 3), ("stub", 1)])
-
-    def test_termination_is_text_only(self):
+    def test_termination_lists_what_it_terminates(self):
         before = sorted(os.listdir(self.dir))
         r = tools.make_termination(self.deck, self.opts, kind="cload",
                                    value2="5f", exclude=["^txd"])
@@ -99,27 +89,24 @@ class TestQuestions(Harness):
         self.assertIn("Cterm_1", r["text"])
         self.assertNotIn("txd0", r["text"])
         self.assertEqual(r["count"], 3)
+        stub = [n for n in r["nets"] if n["net"] == "stub"][0]
+        self.assertEqual((stub["element"], stub["ports"]), ("XSTUB", [1]))
 
     def test_termination_refuses_incomplete_deck(self):
         deck = self.write("broken.sp", ".include 'gone.inc'\n" + DECK)
         with self.assertRaises(tools.DeckError):
             tools.make_termination(deck, self.opts)
-        self.assertEqual(
-            len(tools.find_floating_nets(deck, self.opts)["missing_includes"]),
-            1)
 
     def test_relative_path_refused(self):
         with self.assertRaises(tools.DeckError):
-            tools.deck_summary("top.sp", self.opts)
+            tools.check_errors("top.sp", self.opts)
 
 
 class TestWriting(Harness):
     def test_created_then_refused_then_modified(self):
-        out = os.path.join(self.dir, "sub", "report.txt")
-        r = tools.lint_report(self.deck, self.opts, si=True)
-        self.assertGreater(r["errors"], 0)
-        self.assertIn("si-node-fanout", r["text"])
-        self.assertEqual(tools.write_output(out, r["text"]), ([out], []))
+        out = os.path.join(self.dir, "sub", "term.inc")
+        text = tools.make_termination(self.deck, self.opts)["text"]
+        self.assertEqual(tools.write_output(out, text), ([out], []))
         with self.assertRaises(tools.OutputExists) as cm:
             tools.write_output(out, "new")
         self.assertEqual(cm.exception.path, out)
@@ -131,7 +118,7 @@ class TestWriting(Harness):
 
 class TestCache(Harness):
     def test_reread_after_edit(self):
-        tools.deck_summary(self.deck, self.opts)
+        tools.check_errors(self.deck, self.opts)
         first = tools.load(self.deck, self.opts)
         self.assertIs(tools.load(self.deck, self.opts), first)
         later = time.time() + 5
@@ -139,7 +126,7 @@ class TestCache(Harness):
             fh.write("XEXTRA pad_dq1 x pkg\n")
         os.utime(self.deck, (later, later))
         self.assertEqual(
-            tools.deck_summary(self.deck, self.opts)["elements"], 7)
+            tools.check_errors(self.deck, self.opts)["elements"], 7)
 
 
 if __name__ == "__main__":

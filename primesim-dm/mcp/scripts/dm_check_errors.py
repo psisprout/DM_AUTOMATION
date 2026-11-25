@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Every element on one --net, with the port it uses.
+"""Include, subckt, port-count and other lint errors (not connectivity).
 
-Run by the dm_net_info tool in MCP.py; see --help for the options.  The work is
+Run by the dm_check_errors tool in MCP.py; see --help for the options.  The work is
 done by the primesim_dm_*.py files next to this file in scripts/ (put there
 by mcp/deploy.py), found from Path(__file__).parent, never from the
 working directory.
@@ -24,4 +24,4 @@ else:
     from primesim_dm.tool_cli import main
 
 if __name__ == "__main__":
-    sys.exit(main("dm_net_info"))
+    sys.exit(main("dm_check_errors"))
