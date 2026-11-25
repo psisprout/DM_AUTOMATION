@@ -1,13 +1,14 @@
-"""The script side of the in-house MCP layout: one command per tool, JSON out.
+"""The script side of the in-house MCP layout: one script per tool, JSON out.
 
 The in-house ``MCP.py`` holds the ``@mcp.tool()`` definitions, and each tool
-body hands its arguments to ``run_script(<script>, args)``, which runs a
-script from the ``scripts/`` folder.  ``mcp/scripts/dm_deck.py`` is that
-script for primesim-dm; it calls :func:`main` here, so the logic stays in the
-package and under its tests.
+body hands its arguments to ``run_script(<script>, args)``, which runs that
+tool's script from the ``scripts/`` folder.  ``mcp/scripts/dm_*.py`` are
+those scripts for primesim-dm, one per tool; each is a few lines that call
+:func:`main` here with its own command, so the logic stays in the package
+and under its tests.  The package travels with them: it is copied into
+``scripts/`` as a resource and found from ``Path(__file__).parent``.
 
-    dm_deck.py <command> --deck /abs/top.sp [--output /abs/out] [--overwrite]
-               [--json] [site options] [command options]
+    dm_check_si_fanout.py --deck /abs/top.sp [--json] [site options] ...
 
 Follows the in-house script rules:
 
@@ -43,16 +44,54 @@ from . import tools
 NEED_USER = "[사용자 확인 필요]"
 FAIL = 2
 
-COMMANDS = ("summary", "si-fanout", "floating", "findings", "net",
-            "instance", "lint-report", "terminate", "graph")
+# script name -> (command, the options that command takes)
+SCRIPTS = {
+    "dm_deck_summary": ("summary", ("si",)),
+    "dm_check_si_fanout": ("si-fanout", ("expect", "ignore_passives",
+                                         "limit")),
+    "dm_find_floating_nets": ("floating", ("limit",)),
+    "dm_lint_findings": ("findings", ("code", "severity", "si", "limit")),
+    "dm_net_info": ("net", ("net",)),
+    "dm_instance_info": ("instance", ("name",)),
+    "dm_save_lint_report": ("lint-report", ("output", "si")),
+    "dm_make_termination": ("terminate", ("output", "kind", "value",
+                                          "value2", "exclude")),
+    "dm_render_graph": ("graph", ("output",)),
+}
+COMMANDS = tuple(cmd for cmd, _opts in SCRIPTS.values())
+
+_OPTIONS = {
+    "si": (("--si",), dict(action="store_true",
+                           help="also apply the SI rule (2 elements a net)")),
+    "expect": (("--expect",), dict(type=int, default=2,
+                                   help="elements a signal net should join")),
+    "ignore_passives": (("--ignore-passives",), dict(
+        action="store_true", help="do not count R/C/L")),
+    "limit": (("--limit",), dict(type=int, default=50,
+                                 help="most items to list (default 50)")),
+    "code": (("--code",), dict(help="only this finding code")),
+    "severity": (("--severity",), dict(choices=("error", "warn", "info"))),
+    "net": (("--net",), dict(help="net name")),
+    "name": (("--name",), dict(help="instance name")),
+    "output": (("--output",), dict(help="absolute path to write")),
+    "kind": (("--kind",), dict(choices=("rload", "cload"), default="rload")),
+    "value": (("--value",), dict(default="1T", help="resistor value")),
+    "value2": (("--value2",), dict(default="1f", help="capacitor value")),
+    "exclude": (("--exclude",), dict(action="append", default=[],
+                                     metavar="REGEX",
+                                     help="nets not to terminate")),
+}
 
 
-def build_parser():
-    p = argparse.ArgumentParser(prog="dm_deck.py")
-    p.add_argument("command", choices=COMMANDS)
+def build_parser(script):
+    """The options one tool's script takes: the common ones and its own."""
+    command, own = SCRIPTS[script]
+    p = argparse.ArgumentParser(prog=script + ".py")
+    p.set_defaults(command=command, output=None, overwrite=False, si=False,
+                   expect=2, ignore_passives=False, limit=50, code=None,
+                   severity=None, net=None, name=None, kind="rload",
+                   value="1T", value2="1f", exclude=[])
     p.add_argument("--deck", required=True, help="absolute path of the deck")
-    p.add_argument("--output", help="absolute path to write (file commands)")
-    p.add_argument("--overwrite", action="store_true")
     p.add_argument("--json", action="store_true",
                    help="print the result as one line of JSON, last on stdout")
     p.add_argument("--timeout", type=int, default=55, metavar="SEC",
@@ -65,19 +104,12 @@ def build_parser():
     p.add_argument("--profile", choices=sorted(deck_mod.PROFILES),
                    default=deck_mod.DEFAULT_PROFILE)
     p.add_argument("--keep-net", action="append", default=[], metavar="REGEX")
-    # per-command options
-    p.add_argument("--si", action="store_true")
-    p.add_argument("--expect", type=int, default=2)
-    p.add_argument("--ignore-passives", action="store_true")
-    p.add_argument("--limit", type=int, default=50)
-    p.add_argument("--code")
-    p.add_argument("--severity", choices=("error", "warn", "info"))
-    p.add_argument("--net")
-    p.add_argument("--name")
-    p.add_argument("--kind", choices=("rload", "cload"), default="rload")
-    p.add_argument("--value", default="1T")
-    p.add_argument("--value2", default="1f")
-    p.add_argument("--exclude", action="append", default=[], metavar="REGEX")
+    for key in own:
+        flags, kw = _OPTIONS[key]
+        p.add_argument(*flags, **kw)
+    if "output" in own:
+        p.add_argument("--overwrite", action="store_true",
+                       help="replace --output if it is already there")
     return p
 
 
@@ -203,7 +235,7 @@ def run(args):
 
 
 def _log(msg):
-    print("[dm_deck] %s" % msg, file=sys.stderr)
+    print("[primesim-dm] %s" % msg, file=sys.stderr)
 
 
 class TimedOut(Exception):
@@ -223,14 +255,15 @@ def _print(result, as_json):
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
-def main(argv=None):
-    args = build_parser().parse_args(argv)
+def main(script, argv=None):
+    """Run one tool's script: ``main("dm_net_info")`` from dm_net_info.py."""
+    args = build_parser(script).parse_args(argv)
     timer = hasattr(signal, "SIGALRM") and args.timeout > 0
     if timer:
         signal.signal(signal.SIGALRM, _on_alarm)
         signal.alarm(args.timeout)
     started = time.time()
-    _log("%s %s" % (args.command, args.deck))
+    _log("%s %s" % (script, args.deck))
     try:
         result = run(args)
         code = 0

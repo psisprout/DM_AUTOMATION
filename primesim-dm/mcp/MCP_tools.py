@@ -1,16 +1,16 @@
 # =====================================================================
 # primesim-dm tools for the in-house MCP.py
 #
-# Paste everything below into MCP.py, and copy mcp/scripts/dm_deck.py into
-# the scripts/ folder next to it.  It uses what MCP.py already defines:
+# Paste everything below into MCP.py.  Each tool runs its own script,
+# scripts/dm_<tool>.py; copy mcp/scripts/*.py and the primesim_dm/ package
+# folder into the scripts/ folder next to MCP.py.  It uses what MCP.py
+# already defines:
 #   mcp, require_user_path, run_script, OUTPUT_PATH_DESC, OVERWRITE_DESC
 # and needs these imports there (add the ones MCP.py does not have yet):
 #   from pathlib import Path
 #   from typing import Annotated, Any, Optional
 #   from pydantic import Field
 #
-# dm_deck.py finds the primesim-dm package from PRIMESIM_DM_HOME: set it to
-# the primesim-dm folder in the MCP server's environment.
 # Tool names start with dm_ so they do not clash with the other tools.
 # =====================================================================
 
@@ -31,8 +31,8 @@ DM_LIMIT_DESC = ("목록으로 돌려줄 최대 개수. 나머지는 개수만 n
                  "알려준다.")
 
 
-def _dm_args(command, deck, keep_net=None):
-    args = [command, "--deck", deck, "--json"] + DM_SITE_ARGS
+def _dm_args(deck, keep_net=None):
+    args = ["--deck", deck, "--json"] + DM_SITE_ARGS
     for rx in keep_net or []:
         args += ["--keep-net", rx]
     return args
@@ -74,10 +74,10 @@ def dm_deck_summary(
     - "[사용자 확인 필요]" 오류를 받으면 그 내용을 설명하고 사용자에게 필요한 값을 물어보세요.
     """
     src = require_user_path(deck_path, param="deck_path", what="검사할 덱 파일")
-    args = _dm_args("summary", src)
+    args = _dm_args(src)
     if si:
         args.append("--si")
-    return run_script("dm_deck.py", args)
+    return run_script("dm_deck_summary.py", args)
 
 
 @mcp.tool()
@@ -120,11 +120,11 @@ def dm_check_si_fanout(
     - "[사용자 확인 필요]" 오류를 받으면 그 내용을 설명하고 사용자에게 필요한 값을 물어보세요.
     """
     src = require_user_path(deck_path, param="deck_path", what="검사할 덱 파일")
-    args = _dm_args("si-fanout", src, keep_net)
+    args = _dm_args(src, keep_net)
     args += ["--expect", str(expect), "--limit", str(limit)]
     if ignore_passives:
         args.append("--ignore-passives")
-    return run_script("dm_deck.py", args)
+    return run_script("dm_check_si_fanout.py", args)
 
 
 @mcp.tool()
@@ -162,8 +162,8 @@ def dm_find_floating_nets(
     - "[사용자 확인 필요]" 오류를 받으면 그 내용을 설명하고 사용자에게 필요한 값을 물어보세요.
     """
     src = require_user_path(deck_path, param="deck_path", what="검사할 덱 파일")
-    args = _dm_args("floating", src, keep_net) + ["--limit", str(limit)]
-    return run_script("dm_deck.py", args)
+    args = _dm_args(src, keep_net) + ["--limit", str(limit)]
+    return run_script("dm_find_floating_nets.py", args)
 
 
 @mcp.tool()
@@ -206,14 +206,14 @@ def dm_lint_findings(
     - "[사용자 확인 필요]" 오류를 받으면 그 내용을 설명하고 사용자에게 필요한 값을 물어보세요.
     """
     src = require_user_path(deck_path, param="deck_path", what="검사할 덱 파일")
-    args = _dm_args("findings", src) + ["--limit", str(limit)]
+    args = _dm_args(src) + ["--limit", str(limit)]
     if code:
         args += ["--code", code]
     if severity:
         args += ["--severity", severity]
     if si:
         args.append("--si")
-    return run_script("dm_deck.py", args)
+    return run_script("dm_lint_findings.py", args)
 
 
 @mcp.tool()
@@ -249,10 +249,10 @@ def dm_net_info(
     - "[사용자 확인 필요]" 오류를 받으면 그 내용을 설명하고 사용자에게 필요한 값을 물어보세요.
     """
     src = require_user_path(deck_path, param="deck_path", what="검사할 덱 파일")
-    args = _dm_args("net", src)
+    args = _dm_args(src)
     if net:
         args += ["--net", net]
-    return run_script("dm_deck.py", args)
+    return run_script("dm_net_info.py", args)
 
 
 @mcp.tool()
@@ -286,10 +286,10 @@ def dm_instance_info(
     - "[사용자 확인 필요]" 오류를 받으면 그 내용을 설명하고 사용자에게 필요한 값을 물어보세요.
     """
     src = require_user_path(deck_path, param="deck_path", what="검사할 덱 파일")
-    args = _dm_args("instance", src)
+    args = _dm_args(src)
     if name:
         args += ["--name", name]
-    return run_script("dm_deck.py", args)
+    return run_script("dm_instance_info.py", args)
 
 
 @mcp.tool()
@@ -327,12 +327,12 @@ def dm_save_lint_report(
     """
     src = require_user_path(deck_path, param="deck_path", what="검사할 덱 파일")
     dst = require_user_path(output_path)
-    args = _dm_args("lint-report", src) + ["--output", dst]
+    args = _dm_args(src) + ["--output", dst]
     if si:
         args.append("--si")
     if overwrite:
         args.append("--overwrite")
-    return run_script("dm_deck.py", args, watch_dirs=[str(Path(dst).parent)])
+    return run_script("dm_save_lint_report.py", args, watch_dirs=[str(Path(dst).parent)])
 
 
 @mcp.tool()
@@ -382,13 +382,13 @@ def dm_make_termination(
     """
     src = require_user_path(deck_path, param="deck_path", what="검사할 덱 파일")
     dst = require_user_path(output_path)
-    args = _dm_args("terminate", src) + [
+    args = _dm_args(src) + [
         "--output", dst, "--kind", kind, "--value", value, "--value2", value2]
     for rx in exclude or []:
         args += ["--exclude", rx]
     if overwrite:
         args.append("--overwrite")
-    return run_script("dm_deck.py", args, watch_dirs=[str(Path(dst).parent)])
+    return run_script("dm_make_termination.py", args, watch_dirs=[str(Path(dst).parent)])
 
 
 @mcp.tool()
@@ -422,7 +422,7 @@ def dm_render_graph(
     """
     src = require_user_path(deck_path, param="deck_path", what="그릴 덱 파일")
     dst = require_user_path(output_path)
-    args = _dm_args("graph", src) + ["--output", dst]
+    args = _dm_args(src) + ["--output", dst]
     if overwrite:
         args.append("--overwrite")
-    return run_script("dm_deck.py", args, watch_dirs=[str(Path(dst).parent)])
+    return run_script("dm_render_graph.py", args, watch_dirs=[str(Path(dst).parent)])

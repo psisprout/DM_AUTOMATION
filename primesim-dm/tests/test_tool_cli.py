@@ -33,15 +33,17 @@ class TestScript(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.dir)
 
-    def call(self, *argv):
+    def call(self, command, *argv):
         saved = sys.stdout, sys.stderr
         sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
         try:
-            code = tool_cli.main(list(argv) + ["--json"])
+            script = [k for k, (cmd, _o) in tool_cli.SCRIPTS.items()
+                      if cmd == command][0]
+            code = tool_cli.main(script, list(argv) + ["--json"])
             out, err = sys.stdout.getvalue(), sys.stderr.getvalue()
         finally:
             sys.stdout, sys.stderr = saved
-        self.assertIn("[dm_deck]", err)            # progress goes to stderr
+        self.assertIn("[primesim-dm]", err)            # progress goes to stderr
         lines = out.splitlines()
         self.assertTrue(lines[-1].startswith("{"))  # the JSON is the last line
         return code, json.loads(lines[-1])
@@ -102,6 +104,14 @@ class TestScript(unittest.TestCase):
         self.assertEqual(r["missing_includes"],
                          [{"include": "gone.inc", "from": self.deck,
                            "line": 7}])
+
+    def test_each_script_takes_only_its_own_options(self):
+        with self.assertRaises(SystemExit):
+            tool_cli.build_parser("dm_net_info").parse_args(
+                ["--deck", self.deck, "--output", "/tmp/x"])
+        args = tool_cli.build_parser("dm_make_termination").parse_args(
+            ["--deck", self.deck, "--output", "/tmp/x", "--kind", "cload"])
+        self.assertEqual((args.command, args.kind), ("terminate", "cload"))
 
     def test_timeout_still_answers(self):
         if not hasattr(tool_cli.signal, "SIGALRM"):
