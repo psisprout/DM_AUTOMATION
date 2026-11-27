@@ -1,0 +1,9 @@
+# 특정 파일 양식을 읽을 때만 필요. 없으면 그 양식만 "패키지가 필요합니다" 안내가 나오고 나머지는 정상 동작.
+openpyxl     # .xlsx / .xlsm
+xlrd         # 예전 .xls
+odfpy        # .ods
+scipy        # MATLAB .mat (v5)
+h5py         # HDF5 .h5, MATLAB .mat v7.3
+pyarrow      # Parquet, Feather
+npTDMS       # NI LabVIEW .tdms
+pytest       # tests/ 실행

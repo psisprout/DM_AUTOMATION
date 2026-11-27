@@ -1,0 +1,7 @@
+# current profile MCP — 필수
+mcp>=1.9            # MCP 서버 (1.x, 2.x 모두 지원)
+numpy>=1.21
+pandas>=1.3         # 큰 CSV를 빠르게 읽기, 엑셀/parquet 읽기, 빠른 CSV 저장
+matplotlib>=3.5     # plot_current_profiles
+
+# 선택 패키지(특정 양식용)는 requirements-optional.txt 참고
